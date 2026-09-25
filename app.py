@@ -23,8 +23,8 @@ from ai_service import (
     assess_ops_review, assess_readiness,
 )
 from requirements_engine import (
-    check_requirements, decide_readiness, decide_submission_route,
-    requirement_spec, score_readiness,
+    check_requirements, creator_feedback_policy, decide_readiness,
+    decide_submission_route, requirement_spec, score_readiness,
 )
 
 
@@ -632,18 +632,23 @@ def creator_readiness(campaign_id: str):
         (doc["analysis"] or {}).get("relevance_to_campaign") == "low"
         for doc in documents
     )
+    current_requirements = (
+        check_requirements(campaign, documents)
+        if campaign["status"] != "draft" else analysis["requirements_result"]
+    )
+    assessment = score_readiness(
+        current_requirements, analysis["semantic_result"]
+    )
+    feedback = creator_feedback_policy(
+        campaign, current_requirements, analysis["semantic_result"], assessment
+    )
     return {
         "readiness_state": campaign["readiness_state"] or analysis["overall_state"],
-        "requirements": (
-            check_requirements(campaign, documents)
-            if campaign["status"] != "draft" else analysis["requirements_result"]
-        ),
+        "requirements": current_requirements,
         "semantic_status": analysis["semantic_result"].get("status"),
-        "improvement_suggestions": [
-            issue.get("feedback", "")
-            for issue in analysis["semantic_result"].get("issues", [])
-            if issue.get("feedback")
-        ],
+        "feedback_mode": feedback["mode"],
+        "feedback_reason": feedback["reason"],
+        "improvement_suggestions": feedback["suggestions"],
         "document_feedback": (
             "Some supporting material does not appear to align with the stated "
             "purpose. Please review the material you added."

@@ -150,3 +150,82 @@ def decide_submission_route(
         "forward_with_notes": forward_with_notes,
         "routing_reason": routing_reason,
     }
+
+
+def creator_feedback_policy(
+    campaign: dict, requirements: dict, semantic: dict, assessment: dict
+) -> dict:
+    """Choose concise general guidance or targeted feedback for the creator."""
+    fields = {
+        "story": str(campaign.get("story") or "").strip(),
+        "fund_usage": str(campaign.get("fund_usage") or "").strip(),
+        "fund_delivery": str(campaign.get("fund_delivery") or "").strip(),
+    }
+    thin_fields = [name for name, value in fields.items() if len(value.split()) < 6]
+    combined_words = sum(len(value.split()) for value in fields.values())
+    placeholder_values = {
+        "test", "testing", "asdf", "n/a", "na", "none", "help", "need help",
+        "for needs", "something", "anything",
+    }
+    placeholder_count = sum(
+        value.lower().strip(" .,!?") in placeholder_values for value in fields.values()
+    )
+    low_information = (
+        combined_words < 24 or len(thin_fields) >= 2 or placeholder_count > 0
+    )
+
+    issues = semantic.get("issues", []) if semantic.get("status") == "complete" else []
+    if not issues:
+        return {
+            "mode": "none",
+            "reason": "no_creator_feedback_needed",
+            "suggestions": [],
+        }
+
+    use_general = (
+        low_information or assessment["score"] < 65
+        or assessment["has_critical_issue"] or assessment["finding_count"] >= 3
+    )
+    if not use_general:
+        return {
+            "mode": "targeted",
+            "reason": "limited_specific_gaps",
+            "suggestions": [
+                issue.get("feedback", "").strip()
+                for issue in issues
+                if issue.get("feedback", "").strip()
+            ][:2],
+        }
+
+    suggestions = []
+    purpose_needs_work = (
+        "story" in thin_fields
+        or semantic.get("purpose_clarity") in ("low", "medium")
+        or semantic.get("beneficiary_clarity") in ("low", "medium")
+    )
+    funds_need_work = (
+        "fund_usage" in thin_fields or "fund_delivery" in thin_fields
+        or semantic.get("fund_usage_clarity") in ("low", "medium")
+        or semantic.get("fund_delivery_clarity") in ("low", "medium")
+    )
+    if purpose_needs_work:
+        suggestions.append(
+            "Describe what happened, who needs support, and why help is needed now."
+        )
+    if funds_need_work:
+        suggestions.append(
+            "Add a simple breakdown of what the funds will pay for and how the support will reach the beneficiary."
+        )
+    if semantic.get("internal_consistency") in ("low", "medium"):
+        suggestions.append(
+            "Check that the title, category, story, and beneficiary describe the same need."
+        )
+    if not suggestions:
+        suggestions = [
+            "Add the main facts a reviewer needs: who needs help, what happened, and what the funds will cover."
+        ]
+    return {
+        "mode": "general",
+        "reason": "submission_needs_foundational_detail",
+        "suggestions": suggestions[:2],
+    }

@@ -66,6 +66,45 @@ The backend assigns an internal score from 0 to 100. Missing or invalid fields, 
 
 If the first submission needs substantial clarification, it returns to the creator once. The next submission always enters the reviewer queue. Remaining findings are attached as notes and the campaign is marked `READY_FOR_REVIEW_WITH_NOTES`. A creator can also choose **Submit as it is** after the first return.
 
+## Creator feedback levels
+
+Creator feedback uses one deterministic policy after the model returns structured findings:
+
+| Mode | Used when | Creator response |
+| --- | --- | --- |
+| `general` | Core answers are very short, contain placeholders, the score is below 65, a critical contradiction exists, or there are three or more findings. | At most two broad next steps covering the campaign purpose, beneficiary, use of funds, delivery, or consistency. |
+| `targeted` | The submission has enough context, the score is at least 65, and there are no more than two localized findings. | At most two specific notes tied to the submitted information. |
+| `none` | No semantic finding needs a creator response. | The submission continues without feedback. |
+
+Example of a low-information submission:
+
+```text
+Story: Need help.
+Use of funds: For needs.
+Delivery: I will give it.
+```
+
+Creator response:
+
+```text
+Describe what happened, who needs support, and why help is needed now.
+Add a simple breakdown of what the funds will pay for and how the support will reach the beneficiary.
+```
+
+Example of an otherwise clear submission with one narrow gap:
+
+```text
+The story and budget identify the beneficiary and surgery cost, but do not explain who will receive and pay the clinic invoice.
+```
+
+Creator response:
+
+```text
+Please explain whether you will pay the clinic directly or transfer the funds to the beneficiary.
+```
+
+Reviewers still receive the complete structured findings in both modes.
+
 ## Main API endpoints
 
 | Endpoint | Purpose |
