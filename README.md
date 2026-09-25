@@ -1,59 +1,79 @@
-# ReviewReady: Local Vite, FastAPI, and n8n stack
+# ReviewReady
 
-This demo runs one Vite/React user interface, a separate FastAPI data API, PostgreSQL, and n8n on your computer. The Vite-built interface is served separately on port 5173; FastAPI serves JSON only on port 8000. Creators submit campaigns directly. FastAPI records the submission, then n8n coordinates the initial AI review, routing, detailed reviewer analysis, and review packet. Gemini analysis runs when `GEMINI_API_KEY` is configured. If it is unavailable, submissions still proceed to human review.
+ReviewReady is a local campaign submission and review prototype. Campaign creators enter the facts of a fundraiser, submit it, and receive clarification notes only when the submission is difficult to understand. Reviewers receive a structured packet with the original campaign, completeness checks, supporting material, and any creator override.
 
-## Start the stack
+The system never approves or rejects a campaign automatically. A reviewer chooses the next action.
+
+## What is included
+
+- A Vite and React interface for campaign creators and reviewers
+- A FastAPI JSON API
+- PostgreSQL for campaigns, review packets, events, and reviewer actions
+- An n8n workflow for post-submission processing
+- Optional Gemini analysis for clarity, consistency, and completeness checks
+
+The browser only shows product language. n8n and Gemini remain implementation details documented here for developers.
+
+## Run locally
 
 1. Start Docker Desktop.
-2. Copy `.env.example` to `.env`. Replace the two tokens with different random values and optionally set `GEMINI_API_KEY`. The tested model is `gemini-2.5-flash`. Keep `.env` private.
-3. From this folder, run `docker compose up --build -d`. After a frontend change, run `cd web && npm run build && cd .. && docker compose up --build -d web`. The Docker web service serves the Vite build separately from FastAPI. For Vite development outside Docker, run `cd web && npm install && npm run dev`.
-4. Open the [creator workspace](http://localhost:5173/creator), [reviewer workspace](http://localhost:5173/reviewer), [API documentation](http://localhost:8000/docs), and [n8n editor](http://localhost:5678).
-5. Import [`n8n/workflow.json`](n8n/workflow.json) into n8n.
-6. In the Webhook node, select a **Header Auth** credential with header `X-Workflow-Token` and the same value as `N8N_WEBHOOK_TOKEN`.
-7. In all four HTTP Request nodes, select a **Header Auth** credential with header `X-Internal-Token` and the same value as `INTERNAL_TOKEN`.
-8. Confirm that the **Validate Event** node has `api_base_url` set to `http://fastapi:8000`, then publish the workflow. FastAPI will send new submissions to its production webhook. Events remain in PostgreSQL for retry if the workflow is temporarily unavailable.
+2. Copy `.env.example` to `.env`.
+3. Set different values for `INTERNAL_TOKEN` and `N8N_WEBHOOK_TOKEN`. Add `GEMINI_API_KEY` to enable model-assisted checks. Keep `.env` private.
+4. Run `docker compose up --build -d` from this directory.
+5. Open the [creator workspace](http://localhost:5173/creator), [reviewer workspace](http://localhost:5173/reviewer), [API documentation](http://localhost:8000/docs), and [workflow editor](http://localhost:5678).
 
-Use `docker compose logs -f fastapi n8n` to watch processing. Docker volumes retain the database and n8n configuration across restarts. The FastAPI and n8n ports bind only to `127.0.0.1`.
+For frontend development outside Docker:
 
-## Current flow
+```bash
+cd web
+npm install
+npm run dev
+```
 
-1. The creator enters the campaign details and story in the Vite frontend, then clicks **Submit campaign**. There is no separate readiness button.
-2. FastAPI checks required fields, title length, and the funding goal. Invalid forms remain editable and do not start automation.
-3. FastAPI saves the submission as `INITIAL_REVIEW`, records `CAMPAIGN_SUBMITTED`, and returns immediately. The creator page displays the automation timeline.
-4. n8n calls FastAPI to run Gemini's initial clarity review. A clear campaign continues automatically. A campaign with semantic suggestions becomes `ACTION_REQUIRED` and returns to the creator.
-5. The creator can edit and resubmit, or select **Submit as it is**. The override continues through n8n and becomes `READY_FOR_REVIEW_WITH_NOTES`; the packet records the suggestions and the creator's choice.
-6. n8n analyzes material already present, runs the detailed campaign and completeness review, builds the packet, and changes the campaign to `READY_FOR_REVIEW` or `READY_FOR_REVIEW_WITH_NOTES`.
-7. The reviewer sees two structured AI sections, evidence, the routing status, and a neutral creator override note. Reviewers can record **Continue review**, **Request more information**, or **Escalate**. The final decision remains human.
-8. After submission, the creator may add sample supporting material. FastAPI analyzes these later additions immediately; the review page shows them and their relevance findings on refresh.
+## Configure the workflow
 
-## Try the simulation
+Import [`n8n/workflow.json`](n8n/workflow.json), then configure:
 
-- **Creator** (`/creator`): manage drafts, submit directly into automation, follow its progress, and respond to automated suggestions when needed.
-- **Reviewer** (`/reviewer`): view the queue, inspect each review packet, and record internal human review actions.
-- Supporting material consists of a type, filename, and sample text. Real file uploads and payment details are not implemented.
-- A human reviewer makes the final decision. The three action buttons record workflow steps; they are not approval or rejection controls.
-- Frontend source is in `web/src`. The Vite React frontend owns the pages at `http://localhost:5173` and proxies API calls to FastAPI. FastAPI exposes API documentation at `http://localhost:8000/docs`.
+1. Header Auth on **Campaign Submitted Webhook**: header `X-Workflow-Token`, using the value of `N8N_WEBHOOK_TOKEN`.
+2. Header Auth on the four HTTP Request nodes: header `X-Internal-Token`, using the value of `INTERNAL_TOKEN`.
+3. `api_base_url` in **Validate Event**: `http://fastapi:8000` when using this Compose stack.
+4. Publish the workflow so FastAPI can call its production webhook.
 
-## API flow
+Events remain in PostgreSQL if the workflow is temporarily unavailable. See [`n8n/README.md`](n8n/README.md) for the event contract and retry behavior.
+
+## Submission flow
+
+1. The creator completes the campaign form and selects **Submit campaign**.
+2. FastAPI validates required fields and basic formats.
+3. FastAPI stores the submission and records a `CAMPAIGN_SUBMITTED` event.
+4. The workflow claims the event and asks FastAPI to run the clarity check.
+5. Clear submissions continue to packet preparation.
+6. A submission that needs context returns to the creator as `ACTION_REQUIRED`.
+7. The creator can edit and resubmit or select **Submit as it is**.
+8. An unchanged submission continues as `READY_FOR_REVIEW_WITH_NOTES`. The packet records the notes and the creator's choice.
+9. The reviewer inspects the packet and records **Continue review**, **Request more information**, or **Escalate**.
+
+Supporting material is optional in this prototype. Material added after submission is checked for relevance and appears on the reviewer page after refresh.
+
+## Main API endpoints
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /campaigns` | List campaigns for the creator workspace. |
+| `GET /campaigns` | List creator campaigns. |
 | `POST /campaigns` | Create a draft. |
-| `PATCH /campaigns/{id}` | Update a draft and increment its version. |
-| `POST /campaigns/{id}/documents` | Add optional sample supporting material before or after submission. |
-| `POST /campaigns/{id}/check-readiness` | Legacy/manual readiness endpoint retained for diagnostics; the creator UI no longer calls it. |
-| `POST /campaigns/{id}/submit` | Validate required fields, set `INITIAL_REVIEW`, and record an outbox event without waiting for AI. |
-| `POST /campaigns/{id}/submit-as-is` | Continue an `ACTION_REQUIRED` campaign to human review while preserving automated notes and the creator override. |
-| `GET /campaigns/{id}/readiness` | Return feedback to the creator. Document mismatches are described generally. |
+| `PATCH /campaigns/{id}` | Update a draft. |
+| `POST /campaigns/{id}/submit` | Validate and submit a campaign. |
+| `POST /campaigns/{id}/submit-as-is` | Continue after clarification notes while preserving them for review. |
+| `GET /campaigns/{id}/readiness` | Return creator-facing clarification notes. |
+| `POST /campaigns/{id}/documents` | Add sample supporting material. |
 | `GET /ops/reviews` | List submitted campaigns. |
-| `GET /ops/reviews/{id}` | Return a review packet with detailed campaign and completeness analysis, current documents, and human review actions. |
-| `POST /ops/reviews/{id}/refresh-ai` | Run or reuse the detailed Ops analysis for the current campaign and material. Also backfills older demo submissions. |
-| `POST /ops/reviews/{id}/actions` | Record an internal reviewer action and note. |
+| `GET /ops/reviews/{id}` | Return the review packet and reviewer actions. |
+| `POST /ops/reviews/{id}/refresh-ai` | Refresh detailed campaign and completeness checks. |
+| `POST /ops/reviews/{id}/actions` | Record a reviewer action and internal note. |
 
-The four `/internal/campaigns/{id}/...` endpoints require `X-Internal-Token` and are called by n8n. `claim-processing` prevents concurrent processing of the same event. A stopped job can be retried after its lease expires. `build-review-packet` saves the packet and marks the job complete in one database transaction.
+The `/internal/campaigns/{id}/...` endpoints require `X-Internal-Token`. They support event claiming, document analysis, detailed analysis, and packet creation. Claims use a lease so interrupted work can be retried without processing the same event twice.
 
-### Example campaign
+## Example campaign
 
 ```json
 {
@@ -64,31 +84,28 @@ The four `/internal/campaigns/{id}/...` endpoints require `X-Internal-Token` and
   "goal_amount": 8000,
   "beneficiary": "My daughter",
   "beneficiary_relationship": "Parent",
-  "fund_usage": "6500 for tuition and 1500 for books and accommodation",
+  "fund_usage": "$6,500 for tuition and $1,500 for books and accommodation",
   "fund_delivery": "I will pay the university directly."
 }
 ```
 
-After submission, a reviewer may request supporting material such as `organizer_id`, `beneficiary_id`, `recent_bank_statement`, or an education document. These are illustrative review prompts, not submission prerequisites. Example document request:
+## Prototype limits
 
-```json
-{
-  "document_type": "acceptance_letter",
-  "filename": "acceptance-letter.pdf",
-  "extracted_text": "University admission letter for the beneficiary..."
-}
+- There is no login or role-based authorization.
+- Document input stores metadata and sample text. It does not upload files or run OCR.
+- The category rules are prototype rules, not a copy of any platform's policy.
+- Model output supplies review notes. It does not determine eligibility, fraud, authenticity, approval, or rejection.
+- Reviewer actions are stored internally. They do not message the creator.
+- Campaign and document text is sent to Gemini when `GEMINI_API_KEY` is configured. Use sample data for local demonstrations.
+
+## Repository layout
+
+```text
+web/                    Vite and React interface
+app.py                  FastAPI routes and processing logic
+ai_service.py           Gemini requests and structured response schemas
+requirements_engine.py  deterministic field and category checks
+schema.sql              PostgreSQL schema
+n8n/workflow.json       post-submission workflow
+compose.yaml            local services
 ```
-
-## Demo limitations
-
-- Document endpoints accept metadata and extracted text. File storage, OCR, and document access controls are needed before real use.
-- The rules in `requirements_engine.py` are sample MVP rules from the brief, not verified LaunchGood policy for every category. Review the rules before using them with real campaigns.
-- Creator and reviewer endpoints have no login or user level authorization. This stack is intended for local demonstration.
-- If AI is unavailable, readiness uses structural rules and the packet records `semantic.status = unavailable`.
-- When Gemini is enabled, campaign fields and analyzed document text are sent to the Gemini API. Use sample data if real data must stay private.
-- The reviewer page saves internal workflow actions. It does not send information requests to the creator or save final approval/rejection decisions.
-- AI completeness findings are review prompts based on supplied information, not a document policy or eligibility decision.
-
-## Verification
-
-The Vite build, API syntax, and rule functions were checked locally. A sample browser flow covered draft creation, field validation, AI readiness, submission through n8n, post-submit material, the reviewer queue, and internal review actions. A later end-to-end submission confirmed that n8n created a packet containing separate Gemini campaign and completeness findings. Post-submit material was analyzed by FastAPI. The local API key stays in the private `.env` file.
