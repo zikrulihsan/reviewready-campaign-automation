@@ -1,0 +1,402 @@
+{
+  "name": "P0 + P1 | Campaign Submitted to Ops Review Packet",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Campaign Submitted Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        280
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-submitted",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "campaign-submitted-p0-p1",
+      "notes": "Assign a Webhook Header Auth credential before publishing."
+    },
+    {
+      "id": "validate",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};\nconst eventId = source.event_id;\nconst campaignId = source.campaign_id;\nconst version = source.campaign_version;\nconst valid = source.type === 'CAMPAIGN_SUBMITTED'\n  && typeof eventId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(eventId)\n  && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)\n  && Number.isSafeInteger(version) && version > 0;\nreturn [{ json: {\n  valid,\n  error: valid ? null : 'Expected type=CAMPAIGN_SUBMITTED, event_id, campaign_id, and positive integer campaign_version',\n  event_id: valid ? eventId : null,\n  campaign_id: valid ? campaignId : null,\n  campaign_version: valid ? version : null,\n  api_base_url: 'http://fastapi:8000'\n}}];"
+      },
+      "notes": "Change api_base_url here if FastAPI is not reachable at http://fastapi:8000."
+    },
+    {
+      "id": "if-valid",
+      "name": "Valid Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-valid-condition",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bad-request",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        440
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ accepted: false, error: $json.error }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "accepted",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ accepted: true, event_id: $json.event_id }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "notes": "Acknowledges a valid event before the longer processing starts."
+    },
+    {
+      "id": "claim",
+      "name": "Load Campaign and Claim Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/claim-processing' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Assign the FastAPI internal Header Auth credential after import."
+    },
+    {
+      "id": "if-process",
+      "name": "Process This Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-process-condition",
+              "leftValue": "={{ $json.should_process === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-docs",
+      "name": "Document Analysis Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-docs-condition",
+              "leftValue": "={{ $json.needs_document_analysis === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "docs",
+      "name": "Analyze Pending Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/analyze-documents' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Assign the FastAPI internal Header Auth credential after import."
+    },
+    {
+      "id": "final",
+      "name": "Final Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/final-analysis' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Assign the FastAPI internal Header Auth credential after import."
+    },
+    {
+      "id": "packet",
+      "name": "Build and Publish Review Packet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/build-review-packet' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Assign the FastAPI internal Header Auth credential after import."
+    }
+  ],
+  "connections": {
+    "Campaign Submitted Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Event": {
+      "main": [
+        [
+          {
+            "node": "Valid Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Event?": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign and Claim Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Campaign and Claim Processing": {
+      "main": [
+        [
+          {
+            "node": "Process This Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process This Event?": {
+      "main": [
+        [
+          {
+            "node": "Document Analysis Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Document Analysis Needed?": {
+      "main": [
+        [
+          {
+            "node": "Analyze Pending Documents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Final Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Pending Documents": {
+      "main": [
+        [
+          {
+            "node": "Final Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Analysis": {
+      "main": [
+        [
+          {
+            "node": "Build and Publish Review Packet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  },
+  "pinData": {},
+  "active": false
+}

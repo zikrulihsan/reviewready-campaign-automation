@@ -1,0 +1,27 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+
+# Local editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+
+# Local n8n and database data
+.n8n/
+*.sqlite
+*.sqlite3
+postgres_data/
+n8n_data/
