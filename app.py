@@ -22,7 +22,10 @@ from ai_service import (
     MODEL, OPS_PROMPT_VERSION, PROMPT_VERSION, assess_document,
     assess_ops_review, assess_readiness,
 )
-from requirements_engine import check_requirements, decide_readiness, requirement_spec
+from requirements_engine import (
+    check_requirements, decide_readiness, decide_submission_route,
+    requirement_spec, score_readiness,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -181,6 +184,9 @@ async def get_or_create_readiness(campaign_id: str) -> dict:
                 "requirements": cached["requirements_result"],
                 "semantic": cached["semantic_result"],
                 "readiness_state": cached["overall_state"],
+                "assessment": score_readiness(
+                    cached["requirements_result"], cached["semantic_result"]
+                ),
                 "cached": True,
             }
 
@@ -224,6 +230,9 @@ async def get_or_create_readiness(campaign_id: str) -> dict:
         "requirements": row["requirements_result"],
         "semantic": row["semantic_result"],
         "readiness_state": row["overall_state"],
+        "assessment": score_readiness(
+            row["requirements_result"], row["semantic_result"]
+        ),
         "cached": False,
     }
 
@@ -439,6 +448,8 @@ def update_campaign(campaign_id: str, payload: CampaignUpdate):
         conn.execute(
             sql.SQL("UPDATE campaigns SET {}, status = 'draft', readiness_state = NULL, "
                     "submitted_with_warning = FALSE, creator_override_at = NULL, "
+                    "review_score = NULL, review_level = NULL, "
+                    "review_routing_reason = NULL, "
                     "version = version + 1, updated_at = now() "
                     "WHERE id = %s").format(assignments),
             (*updates.values(), campaign_id),
@@ -477,7 +488,7 @@ async def add_document(campaign_id: str, payload: DocumentInput, background: Bac
                 "document_type": payload.document_type,
                 "stated_subject": "",
                 "relevance_to_campaign": "unknown",
-                "finding": "Document analysis is unavailable; human review can continue.",
+                "finding": "Document analysis is unavailable; the review can continue.",
             }
         with db() as conn:
             conn.execute(
@@ -529,7 +540,8 @@ async def submit_campaign(campaign_id: str, background: BackgroundTasks):
         event_id = "evt_" + uuid4().hex
         conn.execute(
             "UPDATE campaigns SET status = 'initial_review', submitted_with_warning = FALSE, "
-            "creator_override_at = NULL, readiness_state = NULL, updated_at = now() "
+            "creator_override_at = NULL, readiness_state = NULL, review_score = NULL, "
+            "review_level = NULL, review_routing_reason = NULL, updated_at = now() "
             "WHERE id = %s", (campaign_id,),
         )
         event_payload = {
@@ -553,7 +565,7 @@ async def submit_campaign(campaign_id: str, background: BackgroundTasks):
         )
         record_automation_event(
             conn, campaign_id, "submission_received", "complete",
-            "Campaign received. Automated initial review has started.",
+            "Campaign received. Submission checks have started.",
         )
         record_automation_event(
             conn, campaign_id, "initial_ai_review", "running",
@@ -597,7 +609,7 @@ async def submit_campaign_as_is(campaign_id: str, background: BackgroundTasks):
         )
         record_automation_event(
             conn, campaign_id, "creator_override", "complete",
-            "Creator reviewed the automated suggestions and submitted without changes.",
+            "Creator read the clarification notes and continued without changes.",
         )
     background.add_task(dispatch_one_event)
     return {"status": "initial_review", "event_id": event_id}
@@ -637,6 +649,8 @@ def creator_readiness(campaign_id: str):
             "purpose. Please review the material you added."
             if mismatch else None
         ),
+        "clarification_rounds": campaign["clarification_rounds"],
+        "maximum_creator_returns": 1,
     }
 
 
@@ -718,7 +732,7 @@ async def analyze_documents(campaign_id: str, payload: ProcessingInput):
                 "document_type": document["document_type"],
                 "stated_subject": "",
                 "relevance_to_campaign": "unknown",
-                "finding": "Document analysis is unavailable; human review can continue.",
+                "finding": "Document analysis is unavailable; the review can continue.",
             }
         with db() as conn:
             conn.execute(
@@ -742,18 +756,30 @@ async def final_analysis(campaign_id: str, payload: ProcessingInput):
             (payload.event_id,),
         ).fetchone()
         force_review = bool((event["payload"] or {}).get("force_review"))
+        assessment = readiness["assessment"]
+        prior_rounds = campaign["clarification_rounds"]
+        route = decide_submission_route(assessment, prior_rounds, force_review)
+        should_return = route["return_to_creator"]
+        forward_with_notes = route["forward_with_notes"]
+        routing_reason = route["routing_reason"]
         conn.execute(
-            "UPDATE campaigns SET readiness_state = %s, updated_at = now() WHERE id = %s",
-            (readiness["readiness_state"], campaign_id),
+            "UPDATE campaigns SET readiness_state = %s, review_score = %s, "
+            "review_level = %s, submitted_with_warning = %s, "
+            "review_routing_reason = %s, updated_at = now() WHERE id = %s",
+            (
+                readiness["readiness_state"], assessment["score"],
+                assessment["level"], forward_with_notes, routing_reason, campaign_id,
+            ),
         )
         if not force_review:
             complete_automation_step(
                 conn, campaign_id, "initial_ai_review",
-                "Automated clarity review completed.",
+                "Submission check completed.",
             )
-        if readiness["readiness_state"] != "READY_FOR_REVIEW" and not force_review:
+        if should_return:
             conn.execute(
-                "UPDATE campaigns SET status = 'action_required', updated_at = now() "
+                "UPDATE campaigns SET status = 'action_required', "
+                "clarification_rounds = clarification_rounds + 1, updated_at = now() "
                 "WHERE id = %s", (campaign_id,),
             )
             conn.execute(
@@ -766,13 +792,15 @@ async def final_analysis(campaign_id: str, payload: ProcessingInput):
             )
             record_automation_event(
                 conn, campaign_id, "clarification_requested", "action_required",
-                "Automated suggestions are ready for the creator.",
+                "A few details may need clarification before the submission is queued.",
             )
             return {
                 **readiness,
                 "continue_to_packet": False,
                 "campaign_status": "action_required",
                 "ops_review_status": "not_run",
+                "assessment": assessment,
+                "clarification_round": prior_rounds + 1,
             }
         record_automation_event(
             conn, campaign_id, "detailed_reviewer_analysis", "running",
@@ -789,6 +817,9 @@ async def final_analysis(campaign_id: str, payload: ProcessingInput):
         "continue_to_packet": True,
         "campaign_status": "initial_review",
         "ops_review_status": ops_review["status"],
+        "assessment": assessment,
+        "clarification_round": prior_rounds,
+        "forwarded_with_notes": forward_with_notes,
     }
 
 
@@ -847,6 +878,16 @@ def build_review_packet(campaign_id: str, payload: ProcessingInput):
             ),
             "ops_attention": "POTENTIAL_MATERIAL_MISMATCH" if mismatch else None,
             "semantic": analysis["semantic_result"],
+            "internal_assessment": {
+                "score": campaign["review_score"],
+                "level": campaign["review_level"],
+                "clarification_rounds": campaign["clarification_rounds"],
+                "review_attempt": min(campaign["clarification_rounds"] + 1, 2),
+                "routing_reason": campaign["review_routing_reason"],
+                "first_pass_threshold": 85,
+                "resubmission_threshold": 65,
+                "maximum_review_attempts": 2,
+            },
             "ops_review": ops_analysis["result"],
             "documents": [
                 {
@@ -857,11 +898,11 @@ def build_review_packet(campaign_id: str, payload: ProcessingInput):
             ],
             "submitted_with_warning": campaign["submitted_with_warning"],
             "creator_override": {
-                "used": bool(campaign["submitted_with_warning"]),
+                "used": bool(campaign["creator_override_at"]),
                 "at": campaign["creator_override_at"],
                 "note": (
-                    "Creator submitted without changes after reviewing automated suggestions."
-                    if campaign["submitted_with_warning"] else None
+                    "Creator chose to continue with the current information."
+                    if campaign["creator_override_at"] else None
                 ),
             },
         }
@@ -885,9 +926,9 @@ def build_review_packet(campaign_id: str, payload: ProcessingInput):
         record_automation_event(
             conn, campaign_id, "review_packet_ready", "complete",
             (
-                "Ready for human review with automated notes."
+                "Submission queued with clarification notes."
                 if campaign["submitted_with_warning"]
-                else "Ready for human review."
+                else "Submission queued for review."
             ),
         )
     return {"packet_ready": True, "cached": False}

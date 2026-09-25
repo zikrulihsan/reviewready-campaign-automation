@@ -11,8 +11,8 @@ CAMPAIGN_SUBMITTED
   → claim processing job
   → check new or changed supporting material
   → run campaign clarity check
-      → ACTION_REQUIRED when clarification would help
-      → continue when clear or explicitly overridden
+      → ACTION_REQUIRED at most once when clarification would help
+      → continue when clear, explicitly overridden, or checked a second time
   → run detailed reviewer checks
   → build review packet
   → READY_FOR_REVIEW or READY_FOR_REVIEW_WITH_NOTES
@@ -63,6 +63,8 @@ Each endpoint receives:
 ```
 
 The HTTP Request nodes retry failed requests up to three times. The claim endpoint uses a lease so interrupted work can be retried without duplicate processing.
+
+The backend owns the routing score and retry limit. n8n does not loop back by itself. Once the backend has returned a campaign to its creator once, the next submitted version continues to packet creation with any remaining findings attached.
 
 ## Manual checks
 

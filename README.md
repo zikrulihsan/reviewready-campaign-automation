@@ -55,6 +55,17 @@ Events remain in PostgreSQL if the workflow is temporarily unavailable. See [`n8
 
 Supporting material is optional in this prototype. Material added after submission is checked for relevance and appears on the reviewer page after refresh.
 
+## Routing score and retry limit
+
+The backend assigns an internal score from 0 to 100. Missing or invalid fields, unclear answers, and contradictions reduce the score. The score maps to `strong`, `reviewable`, or `needs_attention`; it is used to route work and never to approve or reject a campaign.
+
+- First submission threshold: 85
+- Resubmission threshold: 65
+- Maximum checks before queueing: 2
+- Maximum times returned to the creator: 1
+
+If the first submission needs substantial clarification, it returns to the creator once. The next submission always enters the reviewer queue. Remaining findings are attached as notes and the campaign is marked `READY_FOR_REVIEW_WITH_NOTES`. A creator can also choose **Submit as it is** after the first return.
+
 ## Main API endpoints
 
 | Endpoint | Purpose |

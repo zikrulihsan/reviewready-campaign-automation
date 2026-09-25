@@ -16,11 +16,19 @@ CREATE TABLE IF NOT EXISTS campaigns (
   submitted_with_warning BOOLEAN NOT NULL DEFAULT FALSE,
   creator_override_at TIMESTAMPTZ,
   readiness_state TEXT,
+  clarification_rounds INTEGER NOT NULL DEFAULT 0,
+  review_score INTEGER,
+  review_level TEXT,
+  review_routing_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS creator_override_at TIMESTAMPTZ;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS clarification_rounds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS review_score INTEGER;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS review_level TEXT;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS review_routing_reason TEXT;
 
 CREATE TABLE IF NOT EXISTS campaign_documents (
   id TEXT PRIMARY KEY,

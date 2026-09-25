@@ -90,3 +90,63 @@ def decide_readiness(requirements: dict, semantic: dict) -> str:
     if any(item.get("severity") == "medium" for item in issues):
         return "NEEDS_IMPROVEMENT"
     return "READY_FOR_REVIEW"
+
+
+def score_readiness(requirements: dict, semantic: dict) -> dict:
+    """Return a bounded internal score used for routing, never approval."""
+    score = 100
+    score -= 25 * len(requirements.get("missing_fields", []))
+    score -= 15 * len(requirements.get("invalid_fields", []))
+
+    issues = semantic.get("issues", []) if semantic.get("status") == "complete" else []
+    issue_penalties = {"critical": 25, "medium": 12, "low": 4}
+    score -= sum(issue_penalties.get(item.get("severity"), 0) for item in issues)
+
+    clarity_penalties = {"medium": 2, "low": 5}
+    for key in (
+        "purpose_clarity", "beneficiary_clarity", "fund_usage_clarity",
+        "fund_delivery_clarity", "internal_consistency",
+    ):
+        score -= clarity_penalties.get(semantic.get(key), 0)
+
+    score = max(0, min(100, score))
+    severities = {item.get("severity") for item in issues}
+    level = (
+        "needs_attention" if "critical" in severities or score < 65 else
+        "reviewable" if "medium" in severities or score < 85 else
+        "strong"
+    )
+    return {
+        "score": score,
+        "level": level,
+        "has_critical_issue": any(item.get("severity") == "critical" for item in issues),
+        "finding_count": len(issues),
+    }
+
+
+def decide_submission_route(
+    assessment: dict, prior_clarification_rounds: int, force_review: bool = False
+) -> dict:
+    threshold = 85 if prior_clarification_rounds == 0 else 65
+    below_threshold = (
+        assessment["score"] < threshold or assessment["has_critical_issue"]
+    )
+    return_to_creator = (
+        below_threshold and not force_review and prior_clarification_rounds < 1
+    )
+    forward_with_notes = force_review or (
+        not return_to_creator and assessment["finding_count"] > 0
+        and assessment["level"] != "strong"
+    )
+    routing_reason = (
+        "creator_override" if force_review else
+        "clarification_limit_reached"
+        if forward_with_notes and prior_clarification_rounds >= 1 else
+        "tolerance_applied" if forward_with_notes else None
+    )
+    return {
+        "threshold": threshold,
+        "return_to_creator": return_to_creator,
+        "forward_with_notes": forward_with_notes,
+        "routing_reason": routing_reason,
+    }
