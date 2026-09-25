@@ -1,5 +1,5 @@
 {
-  "name": "Campaign Submission Review and Notification",
+  "name": "Supabase Submission to Review Packet and Demo Email",
   "nodes": [
     {
       "id": "webhook",
@@ -30,9 +30,9 @@
         280
       ],
       "parameters": {
-        "jsCode": "const body = $input.first().json.body;\nconst source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};\nconst eventId = source.event_id;\nconst campaignId = source.campaign_id;\nconst version = source.campaign_version;\nconst valid = source.type === 'CAMPAIGN_SUBMITTED'\n  && typeof eventId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(eventId)\n  && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)\n  && Number.isSafeInteger(version) && version > 0;\nreturn [{ json: {\n  valid,\n  error: valid ? null : 'Expected type=CAMPAIGN_SUBMITTED, event_id, campaign_id, and positive integer campaign_version',\n  event_id: valid ? eventId : null,\n  campaign_id: valid ? campaignId : null,\n  campaign_version: valid ? version : null,\n  api_base_url: 'http://fastapi:8000',\n  app_base_url: 'http://localhost:5173'\n}}];"
+        "jsCode": "const envelope = $input.first().json.body ?? $input.first().json;\nconst record = envelope.record && typeof envelope.record === 'object' ? envelope.record : envelope;\nconst source = record.payload && typeof record.payload === 'object' ? record.payload : record;\nconst eventId = source.event_id;\nconst campaignId = source.campaign_id;\nconst version = source.campaign_version;\nconst valid = (source.type === 'CAMPAIGN_SUBMITTED' || envelope.type === 'INSERT')\n  && typeof eventId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(eventId)\n  && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)\n  && Number.isSafeInteger(version) && version > 0;\nreturn [{ json: {\n  valid,\n  error: valid ? null : 'Expected a Supabase insert containing a CAMPAIGN_SUBMITTED payload',\n  event_id: valid ? eventId : null,\n  campaign_id: valid ? campaignId : null,\n  campaign_version: valid ? version : null,\n  api_base_url: 'https://REPLACE_WITH_NETLIFY_SITE.netlify.app',\n  app_base_url: 'https://REPLACE_WITH_NETLIFY_SITE.netlify.app'\n}}];"
       },
-      "notes": "Change api_base_url here if FastAPI is not reachable at http://fastapi:8000."
+      "notes": "Set api_base_url and app_base_url to the deployed Netlify site URL."
     },
     {
       "id": "if-valid",
@@ -127,7 +127,7 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "notes": "Assign the FastAPI internal Header Auth credential after import."
+      "notes": "Assign the Netlify internal Header Auth credential after import."
     },
     {
       "id": "if-process",
@@ -221,7 +221,7 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "notes": "Assign the FastAPI internal Header Auth credential after import."
+      "notes": "Assign the Netlify internal Header Auth credential after import."
     },
     {
       "id": "final",
@@ -247,7 +247,7 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "notes": "Assign the FastAPI internal Header Auth credential after import."
+      "notes": "Assign the Netlify internal Header Auth credential after import."
     },
     {
       "id": "packet",
@@ -273,21 +273,105 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "notes": "Assign the FastAPI internal Header Auth credential after import."
+      "notes": "Assign the Netlify internal Header Auth credential after import."
     },
     {
       "id": "mock-email-notification",
-      "name": "Prepare Email Notification (Mock)",
+      "name": "Compose Demo Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2200,
+        2640,
         140
       ],
       "parameters": {
-        "jsCode": "const result = $input.first().json;\nconst event = $('Validate Event').first().json;\nconst needsCreatorUpdate = result.awaiting_creator === true;\nconst campaignUrl = needsCreatorUpdate\n  ? `${event.app_base_url}/creator/campaign/${event.campaign_id}`\n  : `${event.app_base_url}/reviewer/campaign/${event.campaign_id}`;\nconst subject = needsCreatorUpdate\n  ? 'A few campaign details need your attention'\n  : 'Campaign ready for review';\nconst body = needsCreatorUpdate\n  ? `Your campaign needs a little more information before it enters the review queue. Open it here: ${campaignUrl}`\n  : `Campaign ${event.campaign_id} is ready in the reviewer queue. Open it here: ${campaignUrl}`;\nreturn [{ json: {\n  ...result,\n  email_notification: {\n    mode: 'mock',\n    delivery_status: 'mock_sent',\n    to: 'zikrulihsanmd@gmail.com',\n    subject,\n    body,\n    campaign_id: event.campaign_id,\n    event_id: event.event_id,\n    created_at: new Date().toISOString()\n  }\n}}];"
+        "jsCode": "const result = $input.first().json;\nconst event = $('Validate Event').first().json;\nconst needsCreatorUpdate = result.awaiting_creator === true;\nconst campaignUrl = needsCreatorUpdate\n  ? `${event.app_base_url}/creator/campaign/${event.campaign_id}`\n  : `${event.app_base_url}/reviewer/campaign/${event.campaign_id}`;\nconst notificationKind = needsCreatorUpdate ? 'needs_clarification' : 'ready_for_review';\nconst subject = needsCreatorUpdate\n  ? 'A few campaign details need your attention'\n  : 'Campaign ready for review';\nconst body = needsCreatorUpdate\n  ? `Your campaign needs a little more information before it enters the review queue. Open it here: ${campaignUrl}`\n  : `Campaign ${event.campaign_id} is ready in the reviewer queue. Open it here: ${campaignUrl}`;\nreturn [{ json: {\n  packet_result: result,\n  notification_kind: notificationKind,\n  email_notification: {\n    mode: 'mock', delivery_status: 'mock_sent', to: 'zikrulihsanmd@gmail.com',\n    subject, body, campaign_id: event.campaign_id, event_id: event.event_id,\n    campaign_version: event.campaign_version\n  }\n}}];"
       },
-      "notes": "Demo-only delivery. Inspect this node output to see the email. Replace it with Gmail or Send Email when credentials are available."
+      "notes": "Creates the demo email payload. The next node persists it to Supabase through the internal API; no email provider is contacted."
+    },
+    {
+      "id": "if-detailed",
+      "name": "Continue to Reviewer Analysis?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "continue-review-condition",
+              "leftValue": "={{ $json.continue_to_packet === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "reviewer-analysis",
+      "name": "Prepare Detailed Reviewer Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/reviewer-analysis' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 35000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version }) }}"
+      },
+      "retryOnFail": false,
+      "notes": "Assign the Netlify internal Header Auth credential after import. Runs separately from readiness so each function stays within the 60-second limit."
+    },
+    {
+      "id": "persist-mock-email",
+      "name": "Save Demo Email to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Validate Event').first().json.api_base_url + '/internal/campaigns/' + $('Validate Event').first().json.campaign_id + '/mock-email' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 35000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_id: $('Validate Event').first().json.event_id, campaign_version: $('Validate Event').first().json.campaign_version, notification_kind: $json.notification_kind, recipient: $json.email_notification.to, subject: $json.email_notification.subject, body: $json.email_notification.body }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "notes": "Assign the Netlify internal Header Auth credential after import."
     }
   ],
   "connections": {
@@ -398,7 +482,7 @@
       "main": [
         [
           {
-            "node": "Build and Publish Review Packet",
+            "node": "Continue to Reviewer Analysis?",
             "type": "main",
             "index": 0
           }
@@ -409,7 +493,47 @@
       "main": [
         [
           {
-            "node": "Prepare Email Notification (Mock)",
+            "node": "Compose Demo Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue to Reviewer Analysis?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Detailed Reviewer Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build and Publish Review Packet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Detailed Reviewer Analysis": {
+      "main": [
+        [
+          {
+            "node": "Build and Publish Review Packet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Demo Email": {
+      "main": [
+        [
+          {
+            "node": "Save Demo Email to Supabase",
             "type": "main",
             "index": 0
           }

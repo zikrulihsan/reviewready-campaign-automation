@@ -1,0 +1,45 @@
+[build]
+  command = "npm --prefix web ci && npm --prefix web run build"
+  publish = "web/dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["postgres"]
+
+[dev]
+  command = "npm --prefix web run dev"
+  targetPort = 5173
+  port = 8888
+
+[[redirects]]
+  from = "/campaigns"
+  to = "/.netlify/functions/api/campaigns"
+  status = 200
+[[redirects]]
+  from = "/campaigns/*"
+  to = "/.netlify/functions/api/campaigns/:splat"
+  status = 200
+[[redirects]]
+  from = "/requirements"
+  to = "/.netlify/functions/api/requirements"
+  status = 200
+[[redirects]]
+  from = "/health"
+  to = "/.netlify/functions/api/health"
+  status = 200
+[[redirects]]
+  from = "/ops/*"
+  to = "/.netlify/functions/api/ops/:splat"
+  status = 200
+[[redirects]]
+  from = "/internal/*"
+  to = "/.netlify/functions/api/internal/:splat"
+  status = 200
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

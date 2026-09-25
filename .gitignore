@@ -10,7 +10,8 @@ __pycache__/
 .venv/
 venv/
 
-# Frontend dependencies and build output
+# Dependencies and frontend build output
+node_modules/
 web/node_modules/
 web/dist/
 
