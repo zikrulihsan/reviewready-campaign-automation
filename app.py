@@ -960,9 +960,8 @@ def get_review(campaign_id: str):
             "WHERE campaign_id = %s ORDER BY created_at DESC, id DESC",
             (campaign_id,),
         ).fetchall()
-        ops_hash = ops_review_hash(
-            campaign, documents, latest_readiness(conn, campaign_id)
-        )
+        semantic = latest_readiness(conn, campaign_id)
+        ops_hash = ops_review_hash(campaign, documents, semantic)
         ops_analysis = conn.execute(
             "SELECT result FROM ops_review_analyses WHERE campaign_id = %s "
             "AND input_hash = %s AND prompt_version = %s",
@@ -972,10 +971,23 @@ def get_review(campaign_id: str):
         raise HTTPException(404, "Review packet not found")
     packet = dict(row["packet"]) if row["packet"] else None
     if packet:
+        current_requirements = check_requirements(campaign, documents)
+        current_assessment = score_readiness(current_requirements, semantic)
         packet["ops_review"] = (
             ops_analysis["result"] if ops_analysis else {"status": "not_run"}
         )
-        packet["requirements"] = check_requirements(campaign, documents)
+        packet["requirements"] = current_requirements
+        packet["internal_assessment"] = {
+            "score": campaign["review_score"] if campaign["review_score"] is not None
+            else current_assessment["score"],
+            "level": campaign["review_level"] or current_assessment["level"],
+            "clarification_rounds": campaign["clarification_rounds"],
+            "review_attempt": min(campaign["clarification_rounds"] + 1, 2),
+            "routing_reason": campaign["review_routing_reason"],
+            "first_pass_threshold": 85,
+            "resubmission_threshold": 65,
+            "maximum_review_attempts": 2,
+        }
         packet["documents"] = [
             {
                 "id": doc["id"], "document_type": doc["document_type"],
