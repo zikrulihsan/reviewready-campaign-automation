@@ -51,7 +51,8 @@ Events remain in PostgreSQL if the workflow is temporarily unavailable. See [`n8
 6. A submission that needs context returns to the creator as `ACTION_REQUIRED`.
 7. The creator can edit and resubmit or select **Submit as it is**.
 8. An unchanged submission continues as `READY_FOR_REVIEW_WITH_NOTES`. The packet records the notes and the creator's choice.
-9. The reviewer inspects the packet and records **Continue review**, **Request more information**, or **Escalate**.
+9. n8n prepares a demo email notification for `zikrulihsanmd@gmail.com` with the relevant creator or reviewer link.
+10. The reviewer inspects the packet and records **Continue review**, **Request more information**, or **Escalate**.
 
 Supporting material is optional in this prototype. Material added after submission is checked for relevance and appears on the reviewer page after refresh.
 
@@ -146,6 +147,7 @@ The `/internal/campaigns/{id}/...` endpoints require `X-Internal-Token`. They su
 - The category rules are prototype rules, not a copy of any platform's policy.
 - Model output supplies review notes. It does not determine eligibility, fraud, authenticity, approval, or rejection.
 - Reviewer actions are stored internally. They do not message the creator.
+- The email notification node is a mock: its payload is visible in the n8n execution, but no email provider is contacted.
 - Campaign and document text is sent to Gemini when `GEMINI_API_KEY` is configured. Use sample data for local demonstrations.
 
 ## Repository layout

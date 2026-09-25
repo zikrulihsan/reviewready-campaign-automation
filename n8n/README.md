@@ -16,6 +16,7 @@ CAMPAIGN_SUBMITTED
   → run detailed reviewer checks
   → build review packet
   → READY_FOR_REVIEW or READY_FOR_REVIEW_WITH_NOTES
+  → prepare email notification
 ```
 
 HTTP `202` confirms receipt. It does not mean the packet is ready. Invalid event payloads return `400`. Failures after receipt remain visible in the n8n execution history and can be retried after the backend claim expires.
@@ -26,6 +27,20 @@ HTTP `202` confirms receipt. It does not mean the packet is ready. Invalid event
 2. On **Campaign Submitted Webhook**, use Header Auth with `X-Workflow-Token` and the value of `N8N_WEBHOOK_TOKEN`.
 3. On all four HTTP Request nodes, use Header Auth with `X-Internal-Token` and the value of `INTERNAL_TOKEN`.
 4. Test the webhook, then publish the workflow. FastAPI calls the production webhook URL.
+
+## Demo email notification
+
+The final **Prepare Email Notification (Mock)** node creates a notification for
+`zikrulihsanmd@gmail.com`. It covers both outcomes:
+
+- a creator update is requested, with a link back to the campaign editor; or
+- the campaign is ready, with a link to the reviewer page.
+
+The node records `delivery_status: mock_sent` in its execution output and does not
+contact an email provider. To enable delivery, replace it with an n8n Gmail or
+Send Email node and map `to`, `subject`, and `body` from
+`$json.email_notification`. Change `app_base_url` in **Validate Event** after the
+frontend is deployed.
 
 Do not put either token directly in `workflow.json`.
 

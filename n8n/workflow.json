@@ -1,5 +1,5 @@
 {
-  "name": "P0 + P1 | Campaign Submitted to Ops Review Packet",
+  "name": "Campaign Submission Review and Notification",
   "nodes": [
     {
       "id": "webhook",
@@ -30,7 +30,7 @@
         280
       ],
       "parameters": {
-        "jsCode": "const body = $input.first().json.body;\nconst source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};\nconst eventId = source.event_id;\nconst campaignId = source.campaign_id;\nconst version = source.campaign_version;\nconst valid = source.type === 'CAMPAIGN_SUBMITTED'\n  && typeof eventId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(eventId)\n  && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)\n  && Number.isSafeInteger(version) && version > 0;\nreturn [{ json: {\n  valid,\n  error: valid ? null : 'Expected type=CAMPAIGN_SUBMITTED, event_id, campaign_id, and positive integer campaign_version',\n  event_id: valid ? eventId : null,\n  campaign_id: valid ? campaignId : null,\n  campaign_version: valid ? version : null,\n  api_base_url: 'http://fastapi:8000'\n}}];"
+        "jsCode": "const body = $input.first().json.body;\nconst source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};\nconst eventId = source.event_id;\nconst campaignId = source.campaign_id;\nconst version = source.campaign_version;\nconst valid = source.type === 'CAMPAIGN_SUBMITTED'\n  && typeof eventId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(eventId)\n  && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)\n  && Number.isSafeInteger(version) && version > 0;\nreturn [{ json: {\n  valid,\n  error: valid ? null : 'Expected type=CAMPAIGN_SUBMITTED, event_id, campaign_id, and positive integer campaign_version',\n  event_id: valid ? eventId : null,\n  campaign_id: valid ? campaignId : null,\n  campaign_version: valid ? version : null,\n  api_base_url: 'http://fastapi:8000',\n  app_base_url: 'http://localhost:5173'\n}}];"
       },
       "notes": "Change api_base_url here if FastAPI is not reachable at http://fastapi:8000."
     },
@@ -274,6 +274,20 @@
       "maxTries": 3,
       "waitBetweenTries": 5000,
       "notes": "Assign the FastAPI internal Header Auth credential after import."
+    },
+    {
+      "id": "mock-email-notification",
+      "name": "Prepare Email Notification (Mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst event = $('Validate Event').first().json;\nconst needsCreatorUpdate = result.awaiting_creator === true;\nconst campaignUrl = needsCreatorUpdate\n  ? `${event.app_base_url}/creator/campaign/${event.campaign_id}`\n  : `${event.app_base_url}/reviewer/campaign/${event.campaign_id}`;\nconst subject = needsCreatorUpdate\n  ? 'A few campaign details need your attention'\n  : 'Campaign ready for review';\nconst body = needsCreatorUpdate\n  ? `Your campaign needs a little more information before it enters the review queue. Open it here: ${campaignUrl}`\n  : `Campaign ${event.campaign_id} is ready in the reviewer queue. Open it here: ${campaignUrl}`;\nreturn [{ json: {\n  ...result,\n  email_notification: {\n    mode: 'mock',\n    delivery_status: 'mock_sent',\n    to: 'zikrulihsanmd@gmail.com',\n    subject,\n    body,\n    campaign_id: event.campaign_id,\n    event_id: event.event_id,\n    created_at: new Date().toISOString()\n  }\n}}];"
+      },
+      "notes": "Demo-only delivery. Inspect this node output to see the email. Replace it with Gmail or Send Email when credentials are available."
     }
   ],
   "connections": {
@@ -385,6 +399,17 @@
         [
           {
             "node": "Build and Publish Review Packet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build and Publish Review Packet": {
+      "main": [
+        [
+          {
+            "node": "Prepare Email Notification (Mock)",
             "type": "main",
             "index": 0
           }
