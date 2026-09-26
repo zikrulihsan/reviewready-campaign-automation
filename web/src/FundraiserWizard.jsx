@@ -10,6 +10,7 @@ const documents = { organizer_id: 'Organizer ID', beneficiary_id: 'Beneficiary I
 const blank = { profile_type: 'self', category: 'medical', title: '', story: '', goal_amount: '', beneficiary: '', beneficiary_relationship: '', fund_usage: '', fund_delivery: '', travel_purpose: '', destination: '', expedited_requested: false, urgency_reason: '', urgency_deadline: '' }
 const documentName = value => documents[value] || value.replaceAll('_', ' ')
 const readyStatuses = ['submitted', 'ready_for_review', 'ready_for_review_with_notes']
+const approvedStatuses = ['awaiting_identity', 'identity_review']
 
 async function request(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } })
@@ -35,6 +36,9 @@ const stepLabels = {
   creator_override: 'Campaigner chose to submit as it is',
   detailed_reviewer_analysis: 'Review notes prepared',
   review_packet_ready: 'Added to review queue',
+  mock_notification_prepared: 'Email preview prepared',
+  automation_failed: 'Preparation paused',
+  automation_retry: 'Preparation restarted',
 }
 
 function AutomationTimeline({ items }) {
@@ -58,7 +62,11 @@ export default function FundraiserWizard() {
   const [readiness, setReadiness] = useState(null)
   const [correctionCycle, setCorrectionCycle] = useState(false)
   const [correctionGuidance, setCorrectionGuidance] = useState([])
-  const [doc, setDoc] = useState({ document_type: 'organizer_id', filename: '', extracted_text: '' })
+  const [doc, setDoc] = useState({ document_type: 'organizer_id', extracted_text: '' })
+  const [docFile, setDocFile] = useState(null)
+  const [humanFeedback, setHumanFeedback] = useState('')
+  const [feedbackSource, setFeedbackSource] = useState('')
+  const [publicSlug, setPublicSlug] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -69,7 +77,9 @@ export default function FundraiserWizard() {
   const automationFailed = campaignStatus === 'automation_failed'
   const needsAction = campaignStatus === 'action_required'
   const isReady = readyStatuses.includes(campaignStatus)
-  const locked = isProcessing || isReady
+  const isApproved = approvedStatuses.includes(campaignStatus)
+  const isLive = campaignStatus === 'live'
+  const locked = isProcessing || isReady || isApproved || isLive
 
   async function loadCampaign(currentId, showLoading = false) {
     if (showLoading) setLoading(true)
@@ -78,11 +88,13 @@ export default function FundraiserWizard() {
       const loaded = Object.fromEntries(Object.keys(blank).map(key => [key, data.campaign[key] ?? '']))
       loaded.urgency_deadline = data.campaign.urgency_deadline ? String(data.campaign.urgency_deadline).slice(0, 10) : ''
       setCampaignId(currentId); setForm(loaded); setCampaignStatus(data.campaign.status); setPriorityStatus(data.campaign.priority_status || 'standard')
+      setHumanFeedback(data.feedback?.[0]?.note || ''); setFeedbackSource(data.campaign.feedback_source || ''); setPublicSlug(data.campaign.public_slug || '')
       setCorrectionCycle(data.campaign.status === 'action_required' || Number(data.campaign.clarification_rounds || 0) > 0)
       setSavedPayload(JSON.stringify({ ...loaded, goal_amount: Number(loaded.goal_amount || 0), urgency_deadline: loaded.urgency_deadline || null }))
       setChoice(data.campaign.profile_type === 'organization' ? 'organization' : 'self')
       setSupporting(data.documents || []); setAutomation(data.automation || [])
-      if (data.campaign.status !== 'draft') setStage(4)
+      if (data.campaign.status !== 'draft' && data.campaign.status !== 'action_required') setStage(4)
+      if (data.campaign.status === 'action_required') setStage(4)
       if (data.campaign.status !== 'draft') {
         const feedback = await request('/campaigns/' + encodeURIComponent(currentId) + '/readiness').catch(() => null)
         if (feedback) {
@@ -166,13 +178,15 @@ export default function FundraiserWizard() {
   }
 
   async function addDocument() {
-    if (!doc.filename.trim()) { setError('Enter a filename first.'); return }
+    if (!docFile) { setError('Choose a PDF, PNG, or JPEG file first.'); return }
+    if (docFile.size > 2 * 1024 * 1024) { setError('Choose a file smaller than 2 MB.'); return }
     setError(''); setNotice(''); setBusy('document')
     try {
-      const result = await request('/campaigns/' + encodeURIComponent(campaignId) + '/documents', { method: 'POST', body: JSON.stringify(doc) })
-      setSupporting(current => [...current, { ...doc, id: result.id }])
-      setDoc(current => ({ ...current, filename: '', extracted_text: '' }))
-      setNotice('Supporting material added for the reviewer.')
+      const content_base64 = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(new Error('Could not read the selected file')); reader.readAsDataURL(docFile) })
+      await request('/campaigns/' + encodeURIComponent(campaignId) + '/documents', { method: 'POST', body: JSON.stringify({ ...doc, filename: docFile.name, mime_type: docFile.type, content_base64 }) })
+      setDoc(current => ({ ...current, extracted_text: '' })); setDocFile(null)
+      await loadCampaign(campaignId)
+      setNotice('File added. The reviewer can open it and record a decision.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -187,18 +201,18 @@ export default function FundraiserWizard() {
 
   return <div className="fund-page">
     <header className="fund-topbar"><Link className="fund-logo" to="/creator"><span className="fund-logo-icon"><Check size={19} /></span><span>reviewready</span></Link><div className="fund-toplinks"><Link to="/creator">My campaigns</Link><span className="fund-demo">DEMO WORKSPACE</span><Link to="/reviewer">Reviewer <ArrowRight size={14} /></Link></div></header>
-    <div className="fund-progress"><div className="fund-progress-track"><span style={{ width: `${((Math.min(stage, 3) + 1) / 4) * 100}%` }} /></div><span>{stage === 4 ? (needsAction ? 'Action needed' : isReady ? 'Ready for review' : automationFailed ? 'Preparation paused' : 'Processing') : `Step ${stage + 1} of 4`}</span></div>
+    <div className="fund-progress"><div className="fund-progress-track"><span style={{ width: `${((Math.min(stage, 3) + 1) / 4) * 100}%` }} /></div><span>{stage === 4 ? (needsAction ? 'Action needed' : isLive ? 'Live' : isApproved ? 'Identity and documents' : isReady ? 'Human review' : automationFailed ? 'Preparation paused' : 'Processing') : `Step ${stage + 1} of 4`}</span></div>
     <main className="fund-main">
-      <div className="fund-intro"><span className="fund-kicker">Campaign submission</span><h1>{stage === 0 ? <>Bismillah.<br /><em>Let's get started.</em></> : stage === 4 ? (needsAction ? 'A few details may help' : isReady ? 'Submission received' : automationFailed ? 'Preparation paused' : 'Preparing your submission') : stages[stage]}</h1><p>{stage === 0 ? 'Start with who will benefit from this campaign.' : stage === 1 ? 'Give reviewers the essential facts about this fundraiser.' : stage === 2 ? 'Explain the need, the intended use of funds, and how support will reach the beneficiary.' : stage === 3 ? 'Submit your campaign. We will check the required fields and flag unclear details before it reaches a reviewer.' : needsAction ? 'A few details may need clarification. You can revise the campaign or continue as it is.' : isReady ? 'Your campaign is now in the review queue.' : 'Your submission is being checked before it enters the queue.'}</p></div>
+      <div className="fund-intro"><span className="fund-kicker">Campaign submission</span><h1>{stage === 0 ? <>Bismillah.<br /><em>Let's get started.</em></> : stage === 4 ? (needsAction ? 'Changes requested' : isLive ? 'Your campaign is live' : isApproved ? 'Content approved' : isReady ? 'Human review' : automationFailed ? 'Preparation paused' : 'Preparing your submission') : stages[stage]}</h1><p>{stage === 0 ? 'Start with who will benefit from this campaign.' : stage === 1 ? 'Give reviewers the essential facts about this fundraiser.' : stage === 2 ? 'Explain the need, the intended use of funds, and how support will reach the beneficiary.' : stage === 3 ? 'Submit your campaign. We will check the required fields and flag unclear details before it reaches a reviewer.' : needsAction ? 'Read the feedback below, update your campaign, and submit it again.' : isLive ? 'Your published story now has a public page.' : isApproved ? 'Upload sample identity and supporting documents for the final human checks before publication.' : isReady ? 'Your campaign is in the human review queue. You can add supporting files while you wait.' : 'Your submission is being checked before it enters the queue.'}</p></div>
       {error && <div className="fund-alert error"><CircleAlert size={18} />{error}</div>}
       {notice && <div className="fund-alert success"><CheckCircle2 size={18} />{notice}</div>}
 
-      {correctionCycle && stage >= 1 && stage <= 3 && <aside className="fund-correction-banner" aria-label="First review correction guidance">
-        <div className="fund-correction-heading"><CircleAlert size={19} /><div><strong>First review needs changes · review cycle 2 of 2</strong><p>Your campaign has not been sent to the reviewer yet. Update the details below, then submit again.</p></div></div>
+      {correctionCycle && stage >= 1 && stage <= 3 && <aside className="fund-correction-banner" aria-label="Review correction guidance">
+        <div className="fund-correction-heading"><CircleAlert size={19} /><div><strong>{feedbackSource === 'reviewer' ? 'Reviewer requested changes' : 'Automated review suggested changes'}</strong><p>Update the details below, then submit again.</p></div></div>
         <details className="fund-correction-details">
           <summary>What should I correct?</summary>
-          {correctionGuidance.length ? <ul>{correctionGuidance.map((item, index) => <li key={index}>{item}</li>)}</ul> : <ul><li>Explain clearly who needs support and why.</li><li>Make the title, category, beneficiary, story, and use of funds describe the same need.</li><li>Say how the support will reach the beneficiary.</li></ul>}
-          <p>This is the one requested update. After resubmission, the campaign may be sent to the reviewer with any remaining notes.</p>
+          {feedbackSource === 'reviewer' && humanFeedback ? <p>{humanFeedback}</p> : correctionGuidance.length ? <ul>{correctionGuidance.map((item, index) => <li key={index}>{item}</li>)}</ul> : <ul><li>Explain clearly who needs support and why.</li><li>Make the title, category, beneficiary, story, and use of funds describe the same need.</li><li>Say how the support will reach the beneficiary.</li></ul>}
+          <p>Your revised submission will return to the review queue.</p>
         </details>
       </aside>}
 
@@ -210,7 +224,30 @@ export default function FundraiserWizard() {
 
       {stage === 3 && <section className="fund-section fund-review"><h2>Submit your campaign</h2><div className="fund-review-row"><span>Campaign</span><strong>{form.title || 'Untitled'}</strong></div><div className="fund-review-row"><span>Goal</span><strong>${Number(form.goal_amount || 0).toLocaleString('en-US')}</strong></div><div className="fund-review-row"><span>Category</span><strong>{categories[form.category]}</strong></div>{missingBeforeSubmit.length > 0 && <div className="fund-missing"><strong>Details that may delay review</strong><p>You can still submit. A reviewer may ask about: {missingBeforeSubmit.map(name => documentName(name)).join(', ')}.</p></div>}{urgencyFields}<div className="fund-check-start"><p>After submission, we check the details and clarity of your answers. If clarification could help, you can revise or continue with the current information.</p><button className="fund-next fund-submit-direct" disabled={Boolean(busy)} onClick={submit}>{busy === 'submit' ? 'Submitting…' : 'Submit campaign'} <ArrowRight size={18} /></button></div></section>}
 
-      {stage === 4 && <section className="fund-section fund-form"><AutomationTimeline items={automation} />{automationFailed && <div className="fund-readiness"><strong>Preparation did not finish</strong><p>Your campaign is saved. Retry the preparation once, or share it with the reviewer to continue manually.</p><button className="fund-next" disabled={Boolean(busy)} onClick={retryProcessing}>{busy === 'retry' ? 'Retrying…' : 'Retry preparation'} <ArrowRight size={18} /></button></div>}{needsAction && <div className="fund-readiness"><strong>{readiness?.recommendation === 'strong_correction' ? 'We strongly recommend adding detail' : 'A few details to clarify'}</strong><p>{readiness?.recommendation === 'strong_correction' ? 'Several important details are unclear. Updating them may help the reviewer understand your request.' : 'A short clarification may help the reviewer.'} This is the only automatic update request; you can continue now.</p>{missingAfterSubmit.length > 0 && <p>Missing details: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{suggestions.length ? suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>) : <div><CircleAlert size={15} />Please review the details before continuing.</div>}{urgencyFields}<div className="fund-soft-gate"><button className="fund-next" onClick={() => { setNotice(''); setStage(2) }}>Update campaign</button><button className="fund-outline" disabled={Boolean(busy)} onClick={submitAsIs}>{busy === 'override' ? 'Submitting…' : 'Submit as it is'} <ArrowRight size={18} /></button></div></div>}{isReady && <div className="fund-submitted"><CheckCircle2 size={22} /><span><strong>{campaignStatus === 'ready_for_review_with_notes' ? 'In the review queue — with notes' : 'In the review queue'}</strong><small>{form.expedited_requested ? priorityStatus === 'confirmed' ? 'Expedited review priority has been confirmed by the reviewer.' : priorityStatus === 'standard' ? 'Your request was placed in the standard review queue.' : 'Your expedited review request is awaiting reviewer triage. Review timing is not guaranteed.' : campaignStatus === 'ready_for_review_with_notes' ? 'The reviewer can see the remaining information gaps.' : 'Your campaign has been added to the queue.'}</small></span></div>}{readyNotes}{isReady && <><h2 className="fund-follow-heading">Optional supporting material</h2><p className="fund-help">A reviewer may ask for more information. This demo accepts a filename and sample excerpt.</p><div className="fund-doc-list">{suggestedDocuments.map((item, index) => <div key={index} className={item.done ? 'complete' : ''}>{item.done ? <CheckCircle2 size={18} /> : <FileText size={18} />}<span>{item.name}</span><small>{item.done ? 'Added' : 'May be requested'}</small></div>)}</div><div className="fund-grid"><Select label="Document type" value={doc.document_type} onChange={v => setDoc(current => ({ ...current, document_type: v }))} options={Object.fromEntries([...new Set([...(requirements?.required_documents || []), ...(requirements?.one_of_documents || []), ...Object.keys(documents)])].map(type => [type, documentName(type)]))} /><Input label="Filename" value={doc.filename} onChange={v => setDoc(current => ({ ...current, filename: v }))} placeholder="supporting-document.pdf" /></div><Input label="Document text" multiline value={doc.extracted_text} onChange={v => setDoc(current => ({ ...current, extracted_text: v }))} placeholder="Paste a short sample excerpt…" /><button className="fund-outline" disabled={Boolean(busy)} onClick={addDocument}><Plus size={17} /> {busy === 'document' ? 'Adding…' : 'Add material'}</button></>}</section>}
+      {stage === 4 && <section className="fund-section fund-form">
+        <AutomationTimeline items={automation} />
+        {automationFailed && <div className="fund-readiness"><strong>Preparation did not finish</strong><p>Your campaign is saved. Retry the preparation once.</p><button className="fund-next" disabled={Boolean(busy)} onClick={retryProcessing}>{busy === 'retry' ? 'Retrying…' : 'Retry preparation'} <ArrowRight size={18} /></button></div>}
+        {needsAction && <div className="fund-readiness">
+          <strong>{feedbackSource === 'reviewer' ? 'Feedback from the review team' : 'AI review suggestions'}</strong>
+          {feedbackSource === 'reviewer' ? <p>{humanFeedback || 'The reviewer asked for more information.'}</p> : <><p>A few details could help the reviewer understand your request. You may update them or continue with the current information.</p>{missingAfterSubmit.length > 0 && <p>Missing details: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>)}</>}
+          <div className="fund-soft-gate"><button className="fund-next" onClick={() => { setNotice(''); setStage(2) }}>Update campaign</button>{feedbackSource !== 'reviewer' && <button className="fund-outline" disabled={Boolean(busy)} onClick={submitAsIs}>{busy === 'override' ? 'Submitting…' : 'Submit as it is'} <ArrowRight size={18} /></button>}</div>
+        </div>}
+        {isReady && <div className="fund-submitted"><CheckCircle2 size={22} /><span><strong>In the human review queue</strong><small>Reviewers can read your story, open each uploaded document, and send specific feedback.</small></span></div>}
+        {readyNotes}
+        {isApproved && <div className="fund-readiness"><strong>Campaign content approved</strong><p>Before publication, add a sample personal ID and any requested supporting files. A human reviewer must accept the files and complete the verification checklist.</p></div>}
+        {isLive && <div className="fund-submitted"><CheckCircle2 size={22} /><span><strong>Published</strong><small>Your campaign page is visible to anyone with its link.</small></span><Link className="fund-outline" to={'/campaign/' + publicSlug}>View live page <ArrowRight size={17} /></Link></div>}
+        {(isReady || isApproved || needsAction) && <>
+          <h2 className="fund-follow-heading">Documents for human review</h2>
+          <p className="fund-help">Prototype only: upload synthetic PDF, PNG, or JPEG files up to 2 MB. Do not upload a real personal ID or bank statement.</p>
+          <div className="fund-doc-list">{suggestedDocuments.map((item, index) => <div key={index} className={item.done ? 'complete' : ''}>{item.done ? <CheckCircle2 size={18} /> : <FileText size={18} />}<span>{item.name}</span><small>{item.done ? 'Uploaded' : 'Needed before live'}</small></div>)}</div>
+          {supporting.length > 0 && <div className="fund-uploaded"><strong>Uploaded files</strong>{supporting.map(item => <div key={item.id}><span>{item.filename} · {documentName(item.document_type)}</span><small>{item.review_status === 'accepted' ? 'Accepted' : item.review_status === 'rejected' ? 'Changes requested' : 'Awaiting reviewer'}{item.reviewer_note ? ` — ${item.reviewer_note}` : ''}</small></div>)}</div>}
+          <Select label="Document type" value={doc.document_type} onChange={v => setDoc(current => ({ ...current, document_type: v, extracted_text: '' }))} options={Object.fromEntries([...new Set([...(requirements?.required_documents || []), ...(requirements?.one_of_documents || []), ...Object.keys(documents)])].map(type => [type, documentName(type)]))} />
+          <label className="fund-field"><span>Choose a sample file *</span><input key={docFile?.name || 'empty'} type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => setDocFile(e.target.files?.[0] || null)} /></label>
+          {!['organizer_id', 'beneficiary_id', 'recent_bank_statement'].includes(doc.document_type) && <Input label="Optional document excerpt for AI notes" multiline value={doc.extracted_text} onChange={v => setDoc(current => ({ ...current, extracted_text: v }))} placeholder="Optional text copied from this document" />}
+          <button className="fund-outline" disabled={Boolean(busy) || !docFile} onClick={addDocument}><Plus size={17} /> {busy === 'document' ? 'Uploading…' : 'Upload file'}</button>
+          {needsAction && feedbackSource === 'reviewer' && <div className="fund-soft-gate"><button className="fund-next" disabled={Boolean(busy)} onClick={submit}>{busy === 'submit' ? 'Resubmitting…' : 'Resubmit for review'} <ArrowRight size={18} /></button></div>}
+        </>}
+      </section>}
 
       <footer className="fund-actions"><button className="fund-back" disabled={stage === 0 || stage === 4} onClick={() => { setError(''); setNotice(''); setStage(current => current - 1) }}><ArrowLeft size={18} /> Back</button><div>{stage > 0 && stage < 3 && <button className="fund-save" disabled={Boolean(busy)} onClick={() => saveDraft().then(() => setNotice('Draft saved.')).catch(e => setError(e.message))}>{busy === 'save' ? 'Saving…' : 'Save draft'}</button>}{stage < 3 ? <button className="fund-next" disabled={Boolean(busy)} onClick={advance}>Next <ArrowRight size={19} /></button> : stage === 4 && <Link className="fund-next" to="/creator">My campaigns <ArrowRight size={19} /></Link>}</div></footer>
       <div className="fund-footnote">ReviewReady demo. The review team decides the next step.</div>

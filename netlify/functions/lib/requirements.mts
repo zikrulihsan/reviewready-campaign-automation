@@ -2,7 +2,7 @@ export const REQUIRED_FIELDS = ['title', 'story', 'beneficiary', 'beneficiary_re
 const PROFILE_DOCUMENTS: Record<string, string[]> = {
   self: ['organizer_id', 'recent_bank_statement'],
   behalf_of_other: ['organizer_id', 'beneficiary_id', 'recent_bank_statement'],
-  organization: ['organization_registration', 'recent_bank_statement'],
+  organization: ['organizer_id', 'organization_registration', 'recent_bank_statement'],
 }
 const CATEGORY_DOCUMENTS: Record<string, string[]> = {
   medical: ['medical_supporting_evidence'],
@@ -39,6 +39,7 @@ export function checkRequirements(campaign: any, documents: any[]) {
   const placeholderCount = coreText.filter((value) => placeholders.has(value.toLowerCase().replace(/[.,!?]/g, '').trim())).length
   return {
     required_fields: [...REQUIRED_FIELDS, 'goal_amount', ...(CATEGORY_FIELDS[campaign.category] || [])],
+    required_documents: [...required].sort(), one_of_documents: oneOf || [],
     missing_fields, invalid_fields, missing_documents, missing_one_of_documents,
     low_information: wordCount < 24 || thinFields >= 2 || placeholderCount > 0,
     placeholder_count: placeholderCount,

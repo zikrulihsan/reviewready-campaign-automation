@@ -1,6 +1,8 @@
 # ReviewReady
 
-ReviewReady is a campaign submission and human review demo. The creator workspace collects campaign details; deterministic checks and Gemini prepare friendly clarification notes and a structured reviewer packet. A human reviewer makes the final decision.
+ReviewReady is an end-to-end campaign review prototype. A creator submits a story, receives AI clarity notes, revises if needed, and enters a human review queue. Reviewers can inspect uploaded documents, request specific changes, approve the story, complete manual verification, and publish a campaign page.
+
+The manual review checklist follows the themes in [LaunchGood's campaign verification guidance](https://support.launchgood.com/support/solutions/articles/35000016132-how-does-launchgood-vet-campaigns-): supporting documentation, beneficiary and funds path, sanctions/risk review, and campaign guidelines. This prototype records reviewer decisions; it does not run external verification services.
 
 ## Hosted architecture
 
@@ -15,8 +17,8 @@ The browser calls the same relative API paths it uses today. Supabase credential
 
 ### 1. Supabase
 
-1. Create a Supabase project and link this repository with the Supabase CLI.
-2. Apply the migration in `supabase/migrations` with `supabase db push`.
+1. Use the existing Supabase project linked to this repository.
+2. Apply pending migrations in `supabase/migrations` with `supabase db push`.
 3. In **Database → Webhooks**, create an `INSERT` webhook for `reviewready.submission_events`.
 4. Set its URL to the production URL of the n8n webhook `campaign-submitted` and add the header required by the n8n Webhook Header Auth credential.
 5. Copy the **Transaction pooler** connection string from Supabase **Connect**. Do not use the browser Data API for application tables.
@@ -39,7 +41,7 @@ The browser calls the same relative API paths it uses today. Supabase credential
 4. Configure HTTP Header Auth with `X-Internal-Token` and the same `INTERNAL_TOKEN` used by Netlify on the internal API nodes.
 5. Activate the workflow and ensure the Supabase Database Webhook points to the active production webhook URL.
 
-The trial is temporary. n8n Cloud requires a paid plan after the trial; if it ends, post-submit automation will stop until it is available again. Supabase Free projects may pause after a week of low activity. Use synthetic campaign content and sample document text only: the public demo has no login.
+The trial is temporary. n8n Cloud requires a paid plan after the trial; if it ends, post-submit automation will stop until it is available again. Supabase Free projects may pause after a week of low activity. Use synthetic campaign content and sample files only: the public prototype has no login.
 
 ## Local development
 
@@ -51,7 +53,7 @@ npm --prefix web ci
 pnpm dev
 ```
 
-Open the local Netlify Dev URL, normally `http://localhost:8888`. The Vite app and Functions run together through Netlify Dev; local campaign data is separate from any previous PostgreSQL demo database.
+Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite proxies API requests to the local Netlify Functions server on port 8888. Both use the configured Supabase project; only use synthetic prototype content.
 
 ## Submission lifecycle
 
@@ -61,13 +63,15 @@ Open the local Netlify Dev URL, normally `http://localhost:8888`. The Vite app a
 4. A reviewability assessment scores completeness (30 points), clarity (50), and consistency (20). If one clarification would materially help, the creator sees a recommendation and can update the campaign or use **Submit as it is**. A second creator submission enters the queue with remaining findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score.
 5. The **Urgent? Submit for an expedited review** toggle sends a time-sensitive submission directly to human review with any gaps attached. It records a priority request, not an automatic queue jump. Reviewers confirm expedited priority or keep the campaign in the standard queue. The reason and deadline are optional and review timing is not guaranteed.
 6. n8n prepares a mock email record. It is visible on the reviewer campaign page, but no email is sent.
-7. Reviewers can continue, request more information, or escalate. The system never approves or rejects a campaign automatically.
+7. The reviewer reads the full story, opens actual uploaded PDF/image files, and accepts or rejects each document with a note. They can request changes; the creator sees the note, updates the story or files, and resubmits. Human feedback can repeat as needed.
+8. The reviewer approves campaign content. The creator then uploads a **sample personal ID** and other required supporting files. The reviewer confirms identity, beneficiary, funds path, sanctions/risk screening, and campaign guidelines manually. All required documents must have accepted uploaded files before publishing.
+9. Publishing creates a public `/campaign/:slug` story page. The public API returns only live campaign fields; document files and internal review notes are not included. Donation processing is not connected in this prototype.
 
 ## Operational behavior
 
 - Events are idempotent by event ID and campaign version. The processing lease prevents duplicate packets.
 - Gemini calls are split across Functions and have a short timeout. A model or quota error produces an unavailable finding and does not block human review.
-- The demo accepts up to two sample supporting materials for each campaign.
+- The prototype accepts up to 12 sample PDF, PNG, or JPEG files (2 MB each) per campaign. Identity and bank document contents are excluded from AI prompts; a reviewer must inspect them manually.
 - If automation stays in progress for five minutes, the creator/reviewer view reports preparation as paused. The creator can retry once; a retry creates a new event and packet processing remains idempotent.
 - Public endpoints have per-IP hourly limits for campaign creation, submission, and AI review. This is a demo safeguard, not account-level access control.
 - Reviewer actions and mock email records are internal demo data and do not contact the campaigner.
@@ -84,4 +88,4 @@ n8n/workflow.json            Asynchronous post-submit workflow
 
 ## Demo limitations
 
-There is no authentication. Anyone with the public site URL can view or change demo campaigns, so use synthetic data only. Document handling stores a filename and sample text; it does not upload files, perform OCR, or authenticate documents. Human reviewers retain all final decisions.
+There is no authentication. Anyone with the site URL can view or change prototype campaigns and access uploaded files, so **never upload a real personal ID, bank statement, or other sensitive data**. Use synthetic sample files only. Uploaded files can be viewed by the reviewer, but the system does not perform OCR, identity verification, sanctions screening, bank validation, or payment processing. The final checklist records simulated human checks for demonstration. Human reviewers retain all final decisions.

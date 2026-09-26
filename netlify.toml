@@ -36,6 +36,10 @@
   to = "/.netlify/functions/api/ops/:splat"
   status = 200
 [[redirects]]
+  from = "/public/*"
+  to = "/.netlify/functions/api/public/:splat"
+  status = 200
+[[redirects]]
   from = "/internal/*"
   to = "/.netlify/functions/api/internal/:splat"
   status = 200
