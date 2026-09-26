@@ -5,6 +5,12 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # Non-secret configuration whose values are documented in README.md and
+  # .env.example. Secrets scanning compares every environment value against the
+  # repo, so these public settings register as leaks. Credentials such as
+  # SMTP_PASSWORD, DATABASE_URL, INTERNAL_TOKEN, GEMINI_API_KEY and
+  # SLACK_REVIEWER_WEBHOOK_URL stay scanned.
+  SECRETS_SCAN_OMIT_KEYS = "SMTP_HOST,SMTP_PORT,SMTP_SECURE,GEMINI_MODEL"
 
 [functions]
   node_bundler = "esbuild"
