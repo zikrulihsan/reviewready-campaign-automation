@@ -7,7 +7,7 @@ The manual review checklist follows the themes in [LaunchGood's campaign verific
 ## Hosted architecture
 
 - **Netlify:** Vite frontend and TypeScript API Functions in one deploy.
-- **Supabase:** private PostgreSQL schema for campaigns, analysis, processing events, and mock notification records.
+- **Supabase:** private PostgreSQL schema for campaigns, analysis, processing events, and notification delivery records.
 - **n8n Cloud:** asynchronous workflow triggered by a Supabase Database Webhook after a submission is committed.
 - **Gemini API:** optional semantic analysis. When unavailable, the submission remains reviewable and model findings are marked unavailable.
 
@@ -31,7 +31,13 @@ The browser calls the same relative API paths it uses today. Supabase credential
    - `INTERNAL_TOKEN`: long random value shared with n8n's Header Auth credential.
    - `GEMINI_API_KEY`: optional model key; keep it out of the Vite environment.
    - `GEMINI_MODEL`: optional, defaults to `gemini-2.5-flash`.
+   - `PUBLIC_APP_URL`: public site origin for links in notifications.
+   - `SLACK_REVIEWER_WEBHOOK_URL`: incoming webhook for the reviewer channel.
+   - `SMTP_HOST=smtp.sumopod.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`, `SMTP_USER`, `SMTP_PASSWORD`: Sumopod's documented SMTP settings and your account credentials.
+   - `NOTIFICATION_FROM_EMAIL`: sender on a verified domain, such as `ReviewReady <updates@example.com>`.
 3. Deploy. The root build command installs the Vite app dependencies and builds `web/dist`.
+
+Create the Slack webhook in your Slack app settings: enable **Incoming Webhooks**, choose **Add New Webhook to Workspace**, select the reviewer channel, and authorize it. Copy the generated URL into Netlify as `SLACK_REVIEWER_WEBHOOK_URL`. Treat that URL as a password; Slack can revoke leaked webhook URLs.
 
 ### 3. n8n Cloud
 
@@ -62,7 +68,7 @@ Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite p
 3. n8n claims the event, requests deterministic and AI checks from the TypeScript API, then requests API persistence of the reviewer packet.
 4. A reviewability assessment scores completeness (30 points), clarity (50), and consistency (20). If one clarification would materially help, the creator sees a recommendation and can update the campaign or use **Submit as it is**. A second creator submission enters the queue with remaining findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score.
 5. The **Urgent? Submit for an expedited review** toggle sends a time-sensitive submission directly to human review with any gaps attached. It records a priority request, not an automatic queue jump. Reviewers confirm expedited priority or keep the campaign in the standard queue. The reason and deadline are optional and review timing is not guaranteed.
-6. n8n prepares a mock email record. It is visible on the reviewer campaign page, but no email is sent.
+6. The creator enters an email address before submission. The API queues status emails for that address and a Slack alert for the reviewer channel when the packet is ready. A scheduled Netlify function retries failed deliveries.
 7. The reviewer reads the full story, opens actual uploaded PDF/image files, and accepts or rejects each document with a note. They can request changes; the creator sees the note, updates the story or files, and resubmits. Human feedback can repeat as needed.
 8. The reviewer approves campaign content. The creator then uploads a **sample personal ID** and other required supporting files. The reviewer confirms identity, beneficiary, funds path, sanctions/risk screening, and campaign guidelines manually. All required documents must have accepted uploaded files before publishing.
 9. Publishing creates a public `/campaign/:slug` story page. The public API returns only live campaign fields; document files and internal review notes are not included. Donation processing is not connected in this prototype.
@@ -74,7 +80,7 @@ Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite p
 - The prototype accepts up to 12 sample PDF, PNG, or JPEG files (2 MB each) per campaign. Identity and bank document contents are excluded from AI prompts; a reviewer must inspect them manually.
 - If automation stays in progress for five minutes, the creator/reviewer view reports preparation as paused. The creator can retry once; a retry creates a new event and packet processing remains idempotent.
 - Public endpoints have per-IP hourly limits for campaign creation, submission, and AI review. This is a demo safeguard, not account-level access control.
-- Reviewer actions and mock email records are internal demo data and do not contact the campaigner.
+- Reviewer change requests, content approval, and publication queue creator emails after the action is saved.
 
 ## Repository layout
 
@@ -88,4 +94,4 @@ n8n/workflow.json            Asynchronous post-submit workflow
 
 ## Demo limitations
 
-There is no authentication. Anyone with the site URL can view or change prototype campaigns and access uploaded files, so **never upload a real personal ID, bank statement, or other sensitive data**. Use synthetic sample files only. Uploaded files can be viewed by the reviewer, but the system does not perform OCR, identity verification, sanctions screening, bank validation, or payment processing. The final checklist records simulated human checks for demonstration. Human reviewers retain all final decisions.
+There is no authentication. Anyone with the site URL can view or change prototype campaigns and access uploaded files, so **never upload a real personal ID, bank statement, or other sensitive data**. Use synthetic sample files only and a test creator email address. Uploaded files can be viewed by the reviewer, but the system does not perform OCR, identity verification, sanctions screening, bank validation, or payment processing. The final checklist records simulated human checks for demonstration. Human reviewers retain all final decisions.

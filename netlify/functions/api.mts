@@ -4,6 +4,7 @@ import { z, ZodError } from 'zod'
 import { json, q, sql } from './lib/db.mts'
 import { assessDocument, assessOpsReview, assessReadiness, MODEL, OPS_PROMPT_VERSION, PROMPT_VERSION, stableHash } from './lib/gemini.mts'
 import { checkRequirements, creatorFeedbackPolicy, decideReadiness, decideSubmissionRoute, requirementSpec, scoreReadiness } from './lib/requirements.mts'
+import { appLink, deliverPendingNotifications, queueNotification } from './lib/notifications.mts'
 
 const app = new Hono()
 const campaignFields = ['profile_type', 'category', 'title', 'story', 'goal_amount', 'beneficiary', 'beneficiary_relationship', 'fund_usage', 'fund_delivery', 'travel_purpose', 'destination'] as const
@@ -11,6 +12,7 @@ const profiles = ['self', 'behalf_of_other', 'organization'] as const
 const categories = ['medical', 'education', 'rent', 'travel', 'business_product', 'refugee_asylum', 'vehicle', 'other'] as const
 const campaignInput = z.object({
   profile_type: z.enum(profiles), category: z.enum(categories), title: z.string().default(''), story: z.string().default(''),
+  creator_email: z.union([z.literal(''), z.string().trim().email().max(254)]).default(''),
   goal_amount: z.coerce.number().min(0).default(0), beneficiary: z.string().default(''), beneficiary_relationship: z.string().default(''),
   fund_usage: z.string().default(''), fund_delivery: z.string().default(''), travel_purpose: z.string().default(''), destination: z.string().default(''),
   expedited_requested: z.boolean().default(false), urgency_reason: z.string().max(500).default(''),
@@ -25,7 +27,6 @@ const documentReviewInput = z.object({ status: z.enum(['accepted', 'rejected']),
 const verificationInput = z.object({ check: z.enum(['identity', 'beneficiary', 'funds_path', 'sanctions', 'guidelines']), checked: z.boolean() })
 const processingInput = z.object({ event_id: z.string().min(1).max(128), campaign_version: z.number().int().positive() })
 const reviewActionInput = z.object({ action: z.enum(['continue_review', 'request_more_information', 'escalate', 'approve_content', 'publish']), note: z.string().max(1000).default('') })
-const mockEmailInput = z.object({ notification_kind: z.enum(['needs_clarification', 'ready_for_review']), recipient: z.literal('zikrulihsanmd@gmail.com'), subject: z.string().min(1).max(255), body: z.string().min(1).max(5000) }).extend(processingInput.shape)
 const uuid = () => crypto.randomUUID()
 const fail = (status: number, message: string): never => { throw Object.assign(new Error(message), { status }) }
 const jsonBody = async (c: any) => {
@@ -160,8 +161,8 @@ app.get('/public/campaigns/:slug', async (c) => {
 app.post('/campaigns', async (c) => {
   await rateLimit(c, 'create-campaign', 30)
   const payload = campaignInput.parse(await jsonBody(c)); const id = uuid()
-  await q`INSERT INTO reviewready.campaigns (id,profile_type,category,title,story,goal_amount,beneficiary,beneficiary_relationship,fund_usage,fund_delivery,travel_purpose,destination,expedited_requested,urgency_reason,urgency_deadline)
-    VALUES (${id},${payload.profile_type},${payload.category},${payload.title},${payload.story},${payload.goal_amount},${payload.beneficiary},${payload.beneficiary_relationship},${payload.fund_usage},${payload.fund_delivery},${payload.travel_purpose},${payload.destination},${payload.expedited_requested},${payload.urgency_reason},${payload.urgency_deadline})`
+  await q`INSERT INTO reviewready.campaigns (id,profile_type,category,title,story,goal_amount,beneficiary,beneficiary_relationship,fund_usage,fund_delivery,travel_purpose,destination,expedited_requested,urgency_reason,urgency_deadline,creator_email)
+    VALUES (${id},${payload.profile_type},${payload.category},${payload.title},${payload.story},${payload.goal_amount},${payload.beneficiary},${payload.beneficiary_relationship},${payload.fund_usage},${payload.fund_delivery},${payload.travel_purpose},${payload.destination},${payload.expedited_requested},${payload.urgency_reason},${payload.urgency_deadline},${payload.creator_email})`
   return c.json({ id, status: 'draft', version: 1 }, 201)
 })
 app.get('/campaigns', async (c) => c.json(await q`SELECT id,title,category,status,readiness_state,goal_amount,version,created_at,updated_at FROM reviewready.campaigns ORDER BY updated_at DESC`))
@@ -227,6 +228,7 @@ async function submit(id: string, forceReview: boolean, urgency: z.infer<typeof 
     const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`
     if (!rows.length) fail(404, 'Campaign not found')
     const campaign = rows[0]
+    if (!z.string().email().safeParse(campaign.creator_email).success) fail(422, 'Add a valid creator email before submitting')
     if (!forceReview && campaign.status === 'initial_review') {
       const events = await tx`SELECT event_id FROM reviewready.submission_events WHERE campaign_id=${id} ORDER BY created_at DESC LIMIT 1`
       return { status: 'initial_review', event_id: events[0]?.event_id }
@@ -307,6 +309,12 @@ app.post('/internal/campaigns/:id/final-analysis', async (c) => {
       await tx`UPDATE reviewready.review_packets SET status='awaiting_creator',updated_at=now() WHERE campaign_id=${id}`
       await tx`UPDATE reviewready.processing_jobs SET status='complete',lease_until=NULL,updated_at=now() WHERE event_id=${payload.event_id}`
       await recordAutomation(tx, id, 'clarification_requested', 'action_required', 'A few details may need clarification before the submission is queued.')
+      if (campaign.creator_email) await queueNotification(tx, {
+        sourceKey: `${payload.event_id}:creator:needs_clarification`, campaignId: id,
+        channel: 'email', kind: 'needs_clarification', recipient: campaign.creator_email,
+        subject: 'A few campaign details need your attention',
+        body: `Your ReviewReady campaign needs a little more information before it enters the review queue. Open it here: ${appLink(`/creator/campaign/${id}`)}`,
+      })
       return { ...readiness, continue_to_packet: false, campaign_status: 'action_required', ops_review_status: 'not_run', assessment: readiness.assessment, clarification_round: rounds + 1 }
     }
     await recordAutomation(tx, id, 'detailed_reviewer_analysis', 'running', 'Preparing deeper campaign and completeness findings.')
@@ -359,17 +367,25 @@ app.post('/internal/campaigns/:id/build-review-packet', async (c) => {
     const status = campaign.submitted_with_warning ? 'ready_for_review_with_notes' : 'ready_for_review'
     await tx`UPDATE reviewready.campaigns SET status=${status},updated_at=now() WHERE id=${id}`
     await recordAutomation(tx, id, 'review_packet_ready', 'complete', campaign.submitted_with_warning ? 'Submission queued with clarification notes.' : 'Submission queued for review.')
+    await queueNotification(tx, {
+      sourceKey: `${payload.event_id}:reviewer:ready_for_review`, campaignId: id,
+      channel: 'slack', kind: 'ready_for_review', recipient: 'reviewers',
+      subject: 'Campaign ready for review',
+      body: `Campaign ready for review${campaign.expedited_requested ? ' · expedited review requested' : ''}: ${appLink(`/reviewer/campaign/${id}`)}`,
+    })
+    if (campaign.creator_email) await queueNotification(tx, {
+      sourceKey: `${payload.event_id}:creator:ready_for_review`, campaignId: id,
+      channel: 'email', kind: 'ready_for_review', recipient: campaign.creator_email,
+      subject: 'Your campaign is in the review queue',
+      body: `Your ReviewReady campaign has entered the human review queue. You can follow its status here: ${appLink(`/creator/campaign/${id}`)}`,
+    })
     return { packet_ready: true, cached: false, campaign_status: status }
   })
   return c.json(outcome)
 })
-app.post('/internal/campaigns/:id/mock-email', async (c) => {
-  requireInternal(c); const id = c.req.param('id'); const payload = mockEmailInput.parse(await jsonBody(c)); await verifiedJob(id, payload)
-  await q`INSERT INTO reviewready.mock_email_notifications (id,event_id,campaign_id,notification_kind,recipient,subject,body,delivery_status)
-    VALUES (${uuid()},${payload.event_id},${id},${payload.notification_kind},${payload.recipient},${payload.subject},${payload.body},'mock_sent')
-    ON CONFLICT (event_id,notification_kind) DO NOTHING`
-  await recordAutomation(sql, id, 'mock_notification_prepared', 'complete', `Demo email prepared for ${payload.recipient}. No email was sent.`)
-  return c.json({ notification_prepared: true, delivery_status: 'mock_sent' })
+app.post('/internal/campaigns/:id/deliver-notifications', async (c) => {
+  requireInternal(c); const id = c.req.param('id'); const payload = processingInput.parse(await jsonBody(c)); await verifiedJob(id, payload)
+  return c.json({ deliveries: await deliverPendingNotifications(3, id) })
 })
 app.post('/internal/campaigns/:id/fail-processing', async (c) => {
   requireInternal(c); const body = await jsonBody(c); const payload = processingInput.parse(body); const id = c.req.param('id'); await verifiedJob(id, payload)
@@ -420,7 +436,7 @@ app.get('/ops/reviews/:id', async (c) => {
       SELECT id,priority_status,note,created_at FROM reviewready.priority_events WHERE campaign_id=c.id
     ) p),'[]'::jsonb) AS priority_events,
     COALESCE((SELECT jsonb_agg(to_jsonb(n) ORDER BY n.created_at DESC) FROM (
-      SELECT id,event_id,notification_kind,recipient,subject,body,delivery_status,created_at FROM reviewready.mock_email_notifications WHERE campaign_id=c.id
+      SELECT id,channel,notification_kind,delivery_status,sent_at,created_at FROM reviewready.notification_deliveries WHERE campaign_id=c.id
     ) n),'[]'::jsonb) AS notifications,
     (SELECT semantic_result FROM reviewready.readiness_analyses WHERE campaign_id=c.id AND prompt_version=${PROMPT_VERSION} ORDER BY created_at DESC LIMIT 1) AS semantic,
     COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.created_at DESC) FROM (
@@ -476,11 +492,18 @@ app.post('/ops/reviews/:id/documents/:documentId/review', async (c) => {
     if (!rows.length) fail(404, 'Campaign not found')
     const campaign = rows[0]
     if (!['ready_for_review', 'ready_for_review_with_notes', 'submitted', 'awaiting_identity', 'identity_review'].includes(campaign.status)) fail(409, 'Document review is unavailable at this stage')
-    const docs = await tx`UPDATE reviewready.campaign_documents SET review_status=${payload.status},reviewer_note=${note},reviewed_at=now() WHERE id=${documentId} AND campaign_id=${id} RETURNING id,document_type,review_status,reviewer_note`
+    const docs = await tx`UPDATE reviewready.campaign_documents SET review_status=${payload.status},reviewer_note=${note},reviewed_at=now() WHERE id=${documentId} AND campaign_id=${id} RETURNING id,document_type,review_status,reviewer_note,reviewed_at`
     if (!docs.length) fail(404, 'Document not found')
     if (docs[0].document_type === 'organizer_id' && payload.status === 'rejected' && ['awaiting_identity', 'identity_review'].includes(campaign.status)) await tx`UPDATE reviewready.campaigns SET status='awaiting_identity',verification_checks=verification_checks - 'identity',updated_at=now() WHERE id=${id}`
+    if (campaign.creator_email && payload.status === 'rejected') await queueNotification(tx, {
+      sourceKey: `${documentId}:${new Date(docs[0].reviewed_at).toISOString()}:creator:document_rejected`,
+      campaignId: id, channel: 'email', kind: 'document_rejected', recipient: campaign.creator_email,
+      subject: 'A reviewer requested a replacement file',
+      body: `A reviewer requested a replacement file for your campaign.\n\nReviewer note: ${note}\n\nOpen your campaign: ${appLink(`/creator/campaign/${id}`)}`,
+    })
     return docs[0]
   })
+  if (payload.status === 'rejected') try { await deliverPendingNotifications(1, id) } catch (error) { console.error('Notification dispatch failed:', error instanceof Error ? error.name : 'unknown') }
   return c.json(result)
 })
 app.post('/ops/reviews/:id/verification', async (c) => {
@@ -517,7 +540,13 @@ app.post('/ops/reviews/:id/actions', async (c) => {
       if (!['identity', 'beneficiary', 'funds_path', 'sanctions', 'guidelines'].every(key => checks[key] === true)) fail(409, 'Complete every manual verification check before publishing')
       const slug = `${String(campaign.title || 'campaign').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 55) || 'campaign'}-${id.slice(0, 8)}`
       await tx`UPDATE reviewready.campaigns SET status='live',public_slug=${slug},published_at=now(),updated_at=now() WHERE id=${id}`
-      await tx`INSERT INTO reviewready.review_actions (id,campaign_id,action,note) VALUES (${uuid()},${id},'publish',${note})`
+      const actionId = uuid()
+      await tx`INSERT INTO reviewready.review_actions (id,campaign_id,action,note) VALUES (${actionId},${id},'publish',${note})`
+      if (campaign.creator_email) await queueNotification(tx, {
+        sourceKey: `${actionId}:creator:published`, campaignId: id, channel: 'email', kind: 'published',
+        recipient: campaign.creator_email, subject: 'Your campaign is live',
+        body: `Your ReviewReady campaign is live: ${appLink(`/campaign/${slug}`)}`,
+      })
       return { status: 'live', public_slug: slug }
     }
     if (!['submitted', 'ready_for_review', 'ready_for_review_with_notes', 'awaiting_identity', 'identity_review'].includes(campaign.status)) fail(409, 'Campaign is not in human review')
@@ -531,8 +560,20 @@ app.post('/ops/reviews/:id/actions', async (c) => {
     }
     const actionId = uuid()
     await tx`INSERT INTO reviewready.review_actions (id,campaign_id,action,note) VALUES (${actionId},${id},${payload.action},${note})`
+    if (campaign.creator_email && ['request_more_information', 'approve_content'].includes(payload.action)) {
+      const requestChanges = payload.action === 'request_more_information'
+      await queueNotification(tx, {
+        sourceKey: `${actionId}:creator:${payload.action}`, campaignId: id, channel: 'email', kind: payload.action,
+        recipient: campaign.creator_email,
+        subject: requestChanges ? 'Your reviewer requested changes' : 'Your campaign content was approved',
+        body: requestChanges
+          ? `Your reviewer asked for these changes:\n\n${note}\n\nOpen your campaign: ${appLink(`/creator/campaign/${id}`)}`
+          : `Your campaign content was approved. Please open it to complete the remaining identity and document steps: ${appLink(`/creator/campaign/${id}`)}`,
+      })
+    }
     return { id: actionId, action: payload.action, note, status: payload.action === 'approve_content' ? 'awaiting_identity' : payload.action === 'request_more_information' ? 'action_required' : campaign.status }
   })
+  try { await deliverPendingNotifications(1, id) } catch (error) { console.error('Notification dispatch failed:', error instanceof Error ? error.name : 'unknown') }
   return c.json(result, 201)
 })
 

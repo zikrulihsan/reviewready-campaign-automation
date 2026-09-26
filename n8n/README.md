@@ -14,7 +14,7 @@ Supabase submission_events INSERT
       → continue after creator override or second submission
   → prepare detailed reviewer analysis
   → build reviewer packet
-  → save mock email record to Supabase
+  → deliver queued Slack and creator email notifications
 ```
 
 The TypeScript API owns event claims, score thresholds, retry limit, and final campaign state. Event ID and campaign version prevent stale or repeated delivery from creating duplicate work.
@@ -28,9 +28,9 @@ The TypeScript API owns event claims, score thresholds, retry limit, and final c
 
 Do not commit tokens or API keys to this workflow file. The workflow's default site URLs are placeholders until the Netlify site exists.
 
-## Mock email
+## Notifications
 
-**Compose Demo Email** prepares either a clarification message for the creator or a ready-for-review message for the reviewer. **Save Demo Email to Supabase** stores it for `zikrulihsanmd@gmail.com`; the reviewer page displays the record. This is a mock notification only; no email provider is contacted.
+The API queues notifications in the same transaction as each review state change. **Deliver Notifications** asks the API to send them after processing. A Netlify scheduled function retries pending or failed deliveries every minute. Configure `SLACK_REVIEWER_WEBHOOK_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_SECURE`, `NOTIFICATION_FROM_EMAIL`, and `PUBLIC_APP_URL` in Netlify. Slack receives a reviewer queue link when a packet is ready; creator emails use the configured SMTP account for clarification, queue entry, reviewer change requests, content approval, and publication.
 
 ## Internal API calls
 
@@ -41,6 +41,6 @@ Do not commit tokens or API keys to this workflow file. The workflow's default s
 | `POST /internal/campaigns/{id}/final-analysis` | Run clarity assessment and decide whether one creator clarification is useful. |
 | `POST /internal/campaigns/{id}/reviewer-analysis` | Prepare detailed campaign and completeness notes in its own function invocation. |
 | `POST /internal/campaigns/{id}/build-review-packet` | Save the packet, update queue status, and complete the job. |
-| `POST /internal/campaigns/{id}/mock-email` | Idempotently save the email mock. |
+| `POST /internal/campaigns/{id}/deliver-notifications` | Send queued notifications for this campaign; the scheduled function retries failures. |
 
 All internal calls send the event ID and campaign version. HTTP requests use a short timeout and limited retry where safe. If the workflow stops, the app shows a paused state after five minutes and allows one fresh processing event.
