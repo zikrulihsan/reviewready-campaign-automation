@@ -16,6 +16,7 @@ async function api(path, options = {}) {
 }
 const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(value || 0))
 const date = value => value ? new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value)) : '—'
+const deadlineDate = value => value ? date(String(value).slice(0, 10) + 'T12:00:00') : '—'
 const shortId = id => id ? '#' + id.slice(0, 8).toUpperCase() : ''
 const docName = name => docLabels[name] || name?.replaceAll('_', ' ') || 'Document'
 const displayTitle = title => title === 'Demo lengkap: Perlengkapan belajar' ? 'Complete demo: Learning supplies' : title || 'Untitled campaign'
@@ -96,7 +97,7 @@ function ReviewerHome() {
     <div className="info-strip"><ShieldCheck size={19} /><span>Checks and notes help reviewers focus. The review team decides the next action.</span></div>
   </Shell>
 }
-function ReviewTable({ items }) { return <div className="table-card"><div className="table-scroll"><table><thead><tr><th>CAMPAIGN</th><th>CATEGORY</th><th>ROUTING</th><th>DETAILS</th><th /></tr></thead><tbody>{items.map(item => <tr key={item.id}><td><Link className="table-title" to={'/reviewer/campaign/' + item.id}>{displayTitle(item.title)}</Link><small>{shortId(item.id)}</small></td><td>{categories[item.category]}</td><td><Badge state={item.status} /></td><td><Badge packet={item.packet_status === 'ready' ? undefined : 'pending'} state={item.status === 'ready_for_review_with_notes' ? 'READY_WITH_NOTES' : 'READY_FOR_REVIEW'} /></td><td><Link className="row-arrow" to={'/reviewer/campaign/' + item.id} aria-label="Open review"><ChevronRight size={19} /></Link></td></tr>)}</tbody></table></div></div> }
+function ReviewTable({ items }) { return <div className="table-card"><div className="table-scroll"><table><thead><tr><th>CAMPAIGN</th><th>CATEGORY</th><th>PRIORITY</th><th>ROUTING</th><th>DETAILS</th><th /></tr></thead><tbody>{items.map(item => <tr key={item.id}><td><Link className="table-title" to={'/reviewer/campaign/' + item.id}>{displayTitle(item.title)}</Link><small>{shortId(item.id)}</small></td><td>{categories[item.category]}</td><td><span className={'priority-tag ' + item.priority_status}>{item.priority_status === 'confirmed' ? 'Confirmed' : item.priority_status === 'requested' ? 'Requested' : 'Standard'}</span>{item.urgency_deadline && <small>By {deadlineDate(item.urgency_deadline)}</small>}</td><td><Badge state={item.status} /></td><td><Badge packet={item.packet_status === 'ready' ? undefined : 'pending'} state={item.status === 'ready_for_review_with_notes' ? 'READY_WITH_NOTES' : 'READY_FOR_REVIEW'} /></td><td><Link className="row-arrow" to={'/reviewer/campaign/' + item.id} aria-label="Open review"><ChevronRight size={19} /></Link></td></tr>)}</tbody></table></div></div> }
 function ReviewQueue() {
   const [items, setItems] = useState(null)
   const [query, setQuery] = useState('')
@@ -104,9 +105,9 @@ function ReviewQueue() {
   const [error, setError] = useState('')
   async function refresh() { try { setItems(await api('/ops/reviews')); setError('') } catch (e) { setError(e.message) } }
   useEffect(() => { refresh() }, [])
-  const filtered = (items || []).filter(item => (filter === 'all' || (filter === 'ready' ? item.packet_status === 'ready' : item.packet_status !== 'ready')) && displayTitle(item.title).toLowerCase().includes(query.toLowerCase()))
+  const filtered = (items || []).filter(item => (filter === 'all' || (filter === 'ready' ? item.packet_status === 'ready' : filter === 'pending' ? item.packet_status !== 'ready' : item.priority_status === 'requested')) && displayTitle(item.title).toLowerCase().includes(query.toLowerCase()))
   return <Shell role="reviewer"><div className="page-heading"><div><div className="eyebrow">REVIEW QUEUE</div><h1>Incoming submissions</h1><p>Browse submitted campaigns for review.</p></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Refresh</button></div>
-    <div className="toolbar"><div className="search"><Search size={18} /><input aria-label="Search campaigns" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search campaign titles…" /></div><div className="filter-tabs">{[['all','All'],['ready','Ready'],['pending','Processing']].map(([key,label]) => <button className={filter === key ? 'active' : ''} key={key} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
+    <div className="toolbar"><div className="search"><Search size={18} /><input aria-label="Search campaigns" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search campaign titles…" /></div><div className="filter-tabs">{[['all','All'],['ready','Ready'],['pending','Processing'],['priority','Priority requests']].map(([key,label]) => <button className={filter === key ? 'active' : ''} key={key} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
     {error && <Notice tone="error">{error}</Notice>}{!items && !error ? <Loading /> : filtered.length ? <ReviewTable items={filtered} /> : <Empty icon={ClipboardList} title="No submissions found" text={items?.length ? 'Try another search or filter.' : 'Submitted campaigns will appear here.'} />}
   </Shell>
 }
@@ -121,6 +122,7 @@ function ReviewDetail() {
   const [actionBusy, setActionBusy] = useState(false)
   const [actionMessage, setActionMessage] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
+  const [priorityBusy, setPriorityBusy] = useState(false)
   async function runOpsReview() {
     setAiBusy(true); setError(''); setActionMessage('')
     try {
@@ -138,6 +140,14 @@ function ReviewDetail() {
       await refresh()
     } catch (e) { setError(e.message) } finally { setActionBusy(false) }
   }
+  async function setPriority(priority_status) {
+    setPriorityBusy(true); setError(''); setActionMessage('')
+    try {
+      await api('/ops/reviews/' + encodeURIComponent(id) + '/priority', { method: 'POST', body: JSON.stringify({ priority_status }) })
+      await refresh()
+      setActionMessage(priority_status === 'confirmed' ? 'Expedited priority confirmed.' : 'Campaign placed in the standard review queue.')
+    } catch (e) { setError(e.message) } finally { setPriorityBusy(false) }
+  }
   async function refresh() { setRefreshing(true); try { setData(await api('/ops/reviews/' + encodeURIComponent(id))); setError('') } catch(e) { setError(e.message) } finally { setRefreshing(false) } }
   useEffect(() => { refresh() }, [id])
   const campaign = data?.campaign || {}
@@ -146,12 +156,14 @@ function ReviewDetail() {
   const sem = packet?.semantic || {}
   const ops = packet?.ops_review || { status: 'not_run' }
   const assessment = packet?.internal_assessment || {}
-  const levelLabel = ({ strong: 'Strong', reviewable: 'Reviewable', needs_attention: 'Needs attention' })[assessment.level] || 'Pending'
+  const levelLabel = ({ strong: 'Strong', reviewable: 'Reviewable', needs_attention: 'Needs attention', unavailable: 'Analysis unavailable' })[assessment.level] || 'Pending'
   const missing = [...(req.missing_fields || []).map(x => 'Field: ' + (fieldLabels[x] || x)), ...(req.invalid_fields || []).map(x => x)]
   return <Shell role="reviewer"><Link className="back-link" to="/reviewer/queue"><ArrowLeft size={16} /> Back to queue</Link>
     {error && <Notice tone="error">{error}</Notice>}{!data && !error ? <Loading /> : data && <><div className="page-heading editor-heading"><div><div className="eyebrow">SUBMISSION · {shortId(id)}</div><h1>{displayTitle(campaign.title)}</h1><p>Submitted · {categories[campaign.category]}</p></div><button className="button secondary" onClick={refresh} disabled={refreshing}><RefreshCw size={17} /> {refreshing ? 'Loading…' : 'Refresh'}</button></div>
-      <div className="review-summary"><div><span>Funding goal</span><strong>{money(campaign.goal_amount)}</strong></div><div><span>Creator profile</span><strong>{profiles[campaign.profile_type]}</strong></div><div><span>Routing status</span><Badge state={campaign.status} /></div><div><span>Submission quality</span><strong>{assessment.score != null ? `${assessment.score}/100 · ${levelLabel}` : 'Pending'}</strong><small>{assessment.review_attempt ? `Check ${assessment.review_attempt} of ${assessment.maximum_review_attempts}` : 'Internal routing score'}</small></div></div>
-      {campaign.submitted_with_warning && <Notice><strong>Submitted with notes:</strong>&nbsp; The creator continued with the current information. Review the notes alongside the campaign.</Notice>}{actionMessage && <Notice tone="success">{actionMessage}</Notice>}
+      <div className="review-summary"><div><span>Funding goal</span><strong>{money(campaign.goal_amount)}</strong></div><div><span>Creator profile</span><strong>{profiles[campaign.profile_type]}</strong></div><div><span>Routing status</span><Badge state={campaign.status} /></div><div><span>Submission quality</span><strong>{assessment.score != null ? `${assessment.score}/100 · ${levelLabel}` : levelLabel}</strong><small>{assessment.creator_submission_count ? `Creator submission ${assessment.creator_submission_count}` : 'Internal routing assessment'}</small></div></div>
+      {packet && <div className="review-assessment"><strong>Reviewability breakdown</strong><span>Completeness {assessment.breakdown?.completeness ?? '—'}/30</span><span>Clarity {assessment.breakdown?.clarity ?? '—'}/50</span><span>Consistency {assessment.breakdown?.consistency ?? '—'}/20</span><span>Recommendation: {String(assessment.recommendation || 'pending').replaceAll('_', ' ')}</span></div>}
+      {campaign.expedited_requested && <div className="review-priority"><div><strong>Expedited review requested</strong><p>{campaign.urgency_reason || 'No reason provided.'}{campaign.urgency_deadline ? ` Deadline: ${deadlineDate(campaign.urgency_deadline)}.` : ''}</p><small>Status: {campaign.priority_status === 'confirmed' ? 'priority confirmed' : campaign.priority_status === 'requested' ? 'awaiting reviewer triage' : 'standard queue'}. Review timing is not guaranteed.</small></div>{['ready_for_review','ready_for_review_with_notes','submitted'].includes(campaign.status) && <div className="review-priority-actions"><button className="button primary" disabled={priorityBusy || campaign.priority_status === 'confirmed'} onClick={() => setPriority('confirmed')}>Confirm priority</button><button className="button secondary" disabled={priorityBusy || campaign.priority_status === 'standard'} onClick={() => setPriority('standard')}>Standard queue</button></div>}{data.priority_events?.length > 0 && <details><summary>Priority history</summary>{data.priority_events.map(event => <p key={event.id}>{date(event.created_at)} · {event.priority_status === 'confirmed' ? 'Confirmed' : 'Standard queue'}{event.note ? ` · ${event.note}` : ''}</p>)}</details>}</div>}
+      {campaign.submitted_with_warning && <Notice><strong>Submitted with notes:</strong>&nbsp; Review the remaining information gaps alongside the campaign.</Notice>}{actionMessage && <Notice tone="success">{actionMessage}</Notice>}
       {packet?.ops_attention && <Notice tone="error">Some supporting documents may not match the campaign purpose. Review them manually.</Notice>}
       {campaign.status === 'automation_failed' || data.packet_status === 'failed' ? <Notice tone="error">Automated preparation paused. You can inspect the campaign now; the creator can retry preparation once.</Notice> : data.status !== 'ready' && <Notice>Review details are being prepared. You can inspect the campaign information below now.</Notice>}
       <div className="review-layout"><div className="review-main">

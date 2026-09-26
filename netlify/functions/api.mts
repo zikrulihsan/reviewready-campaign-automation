@@ -13,8 +13,12 @@ const campaignInput = z.object({
   profile_type: z.enum(profiles), category: z.enum(categories), title: z.string().default(''), story: z.string().default(''),
   goal_amount: z.coerce.number().min(0).default(0), beneficiary: z.string().default(''), beneficiary_relationship: z.string().default(''),
   fund_usage: z.string().default(''), fund_delivery: z.string().default(''), travel_purpose: z.string().default(''), destination: z.string().default(''),
+  expedited_requested: z.boolean().default(false), urgency_reason: z.string().max(500).default(''),
+  urgency_deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value).nullable().default(null),
 })
 const campaignUpdate = campaignInput.partial()
+const urgencyInput = campaignInput.pick({ expedited_requested: true, urgency_reason: true, urgency_deadline: true }).partial()
+const priorityInput = z.object({ priority_status: z.enum(['standard', 'confirmed']), note: z.string().max(1000).default('') })
 const documentInput = z.object({ document_type: z.string().min(1).max(100), filename: z.string().min(1).max(255), extracted_text: z.string().max(100000).default('') })
 const processingInput = z.object({ event_id: z.string().min(1).max(128), campaign_version: z.number().int().positive() })
 const reviewActionInput = z.object({ action: z.enum(['continue_review', 'request_more_information', 'escalate']), note: z.string().max(1000).default('') })
@@ -23,6 +27,11 @@ const uuid = () => crypto.randomUUID()
 const fail = (status: number, message: string): never => { throw Object.assign(new Error(message), { status }) }
 const jsonBody = async (c: any) => {
   try { return await c.req.json() } catch { fail(400, 'Invalid JSON body') }
+}
+const optionalJsonBody = async (c: any) => {
+  const body = await c.req.text()
+  if (!body.trim()) return {}
+  try { return JSON.parse(body) } catch { fail(400, 'Invalid JSON body') }
 }
 const requireInternal = (c: any) => {
   const token = process.env.INTERNAL_TOKEN
@@ -44,7 +53,7 @@ async function documentsFor(id: string, tx: any = sql) {
   return await tx`SELECT * FROM reviewready.campaign_documents WHERE campaign_id = ${id} ORDER BY created_at, id`
 }
 async function automationFor(id: string, tx: any = sql) {
-  return await tx`SELECT id, step, status, detail, created_at FROM reviewready.campaign_automation_events WHERE campaign_id = ${id} ORDER BY created_at, id`
+  return await tx`SELECT id, step, status, detail, created_at FROM reviewready.campaign_automation_events WHERE campaign_id = ${id} ORDER BY created_at DESC, id DESC`
 }
 async function recordAutomation(tx: any, campaignId: string, step: string, status = 'complete', detail = '') {
   await tx`INSERT INTO reviewready.campaign_automation_events (id,campaign_id,step,status,detail) VALUES (${uuid()},${campaignId},${step},${status},${detail})`
@@ -82,7 +91,8 @@ async function getOrCreateReadiness(campaignId: string) {
   const inputHash = readinessHash(campaign)
   const cached = await q`SELECT * FROM reviewready.readiness_analyses WHERE campaign_id=${campaignId} AND input_hash=${inputHash} AND prompt_version=${PROMPT_VERSION}`
   if (cached.length && !(process.env.GEMINI_API_KEY && cached[0].semantic_result.status === 'unavailable')) {
-    return { campaign_id: campaignId, campaign_version: campaign.version, requirements: cached[0].requirements_result, semantic: cached[0].semantic_result, readiness_state: cached[0].overall_state, assessment: scoreReadiness(cached[0].requirements_result, cached[0].semantic_result), cached: true }
+    const requirements = checkRequirements(campaign, docs)
+    return { campaign_id: campaignId, campaign_version: campaign.version, requirements, semantic: cached[0].semantic_result, readiness_state: decideReadiness(requirements, cached[0].semantic_result), assessment: scoreReadiness(requirements, cached[0].semantic_result), cached: true }
   }
   const requirements = checkRequirements(campaign, docs)
   let semantic: any
@@ -137,8 +147,8 @@ app.get('/requirements', (c) => c.json(requirementSpec(c.req.query('profile_type
 app.post('/campaigns', async (c) => {
   await rateLimit(c, 'create-campaign', 30)
   const payload = campaignInput.parse(await jsonBody(c)); const id = uuid()
-  await q`INSERT INTO reviewready.campaigns (id,profile_type,category,title,story,goal_amount,beneficiary,beneficiary_relationship,fund_usage,fund_delivery,travel_purpose,destination)
-    VALUES (${id},${payload.profile_type},${payload.category},${payload.title},${payload.story},${payload.goal_amount},${payload.beneficiary},${payload.beneficiary_relationship},${payload.fund_usage},${payload.fund_delivery},${payload.travel_purpose},${payload.destination})`
+  await q`INSERT INTO reviewready.campaigns (id,profile_type,category,title,story,goal_amount,beneficiary,beneficiary_relationship,fund_usage,fund_delivery,travel_purpose,destination,expedited_requested,urgency_reason,urgency_deadline)
+    VALUES (${id},${payload.profile_type},${payload.category},${payload.title},${payload.story},${payload.goal_amount},${payload.beneficiary},${payload.beneficiary_relationship},${payload.fund_usage},${payload.fund_delivery},${payload.travel_purpose},${payload.destination},${payload.expedited_requested},${payload.urgency_reason},${payload.urgency_deadline})`
   return c.json({ id, status: 'draft', version: 1 }, 201)
 })
 app.get('/campaigns', async (c) => c.json(await q`SELECT id,title,category,status,readiness_state,goal_amount,version,created_at,updated_at FROM reviewready.campaigns ORDER BY updated_at DESC`))
@@ -148,8 +158,8 @@ app.get('/campaigns/:id', async (c) => {
 app.patch('/campaigns/:id', async (c) => {
   const id = c.req.param('id'); const updates = campaignUpdate.parse(await jsonBody(c)); const entries = Object.entries(updates)
   if (!entries.length) fail(400, 'No fields to update')
-  const allowed = new Set(campaignFields)
-  for (const [key, value] of entries) if (!allowed.has(key as any) || value === undefined || value === null) fail(422, 'Use empty strings to clear text fields')
+  const allowed = new Set(Object.keys(campaignInput.shape))
+  for (const [key, value] of entries) if (!allowed.has(key) || value === undefined || (value === null && key !== 'urgency_deadline')) fail(422, 'Use empty strings to clear text fields')
   const result = await sql.begin(async (tx) => {
     const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`
     if (!rows.length) fail(404, 'Campaign not found')
@@ -157,7 +167,7 @@ app.patch('/campaigns/:id', async (c) => {
     if (!['draft', 'action_required'].includes(campaign.status)) fail(409, 'This campaign cannot be edited while it is processing or in review')
     const assignments = entries.map(([key], index) => `${key} = $${index + 1}`).join(', ')
     const values = entries.map(([, value]) => value)
-    const updated = await tx.unsafe(`UPDATE reviewready.campaigns SET ${assignments}, status='draft', readiness_state=NULL, submitted_with_warning=FALSE, creator_override_at=NULL, review_score=NULL, review_level=NULL, review_routing_reason=NULL, version=version+1, updated_at=now() WHERE id=$${values.length + 1} RETURNING version`, [...values, id])
+    const updated = await tx.unsafe(`UPDATE reviewready.campaigns SET ${assignments}, status='draft', readiness_state=NULL, submitted_with_warning=FALSE, creator_override_at=NULL, review_score=NULL, review_level=NULL, review_breakdown=NULL, review_recommendation=NULL, review_routing_reason=NULL, priority_status='standard', version=version+1, updated_at=now() WHERE id=$${values.length + 1} RETURNING version`, [...values, id])
     return updated[0]
   })
   return c.json({ id, version: result.version })
@@ -186,10 +196,9 @@ app.post('/campaigns/:id/check-readiness', async (c) => {
   const id = c.req.param('id'); const campaign = await campaignOr404(id)
   if (campaign.status !== 'draft') fail(409, 'Readiness check is for drafts only')
   const requirements = checkRequirements(campaign, await documentsFor(id))
-  if (!requirements.submission_complete) return c.json({ campaign_id: id, campaign_version: campaign.version, requirements, semantic: { status: 'skipped', issues: [] }, readiness_state: 'NEEDS_IMPROVEMENT', validation_failed: true })
   return c.json(await getOrCreateReadiness(id))
 })
-async function submit(id: string, forceReview: boolean) {
+async function submit(id: string, forceReview: boolean, urgency: z.infer<typeof urgencyInput> = {}) {
   return await sql.begin(async (tx) => {
     const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`
     if (!rows.length) fail(404, 'Campaign not found')
@@ -202,9 +211,11 @@ async function submit(id: string, forceReview: boolean) {
     if (!forceReview && !['draft', 'action_required'].includes(campaign.status)) fail(409, 'Campaign has already moved to human review')
     const docs = await tx`SELECT * FROM reviewready.campaign_documents WHERE campaign_id=${id}`
     const requirements = checkRequirements(campaign, docs)
-    if (!requirements.submission_complete) fail(422, 'Complete the required campaign fields and fix invalid values before submitting')
     const eventId = `evt_${uuid().replaceAll('-', '')}`
-    await tx`UPDATE reviewready.campaigns SET status='initial_review',submitted_with_warning=${forceReview},creator_override_at=${forceReview ? new Date() : null},readiness_state=NULL,review_score=NULL,review_level=NULL,review_routing_reason=NULL,updated_at=now() WHERE id=${id}`
+    const expedited = urgency.expedited_requested ?? campaign.expedited_requested
+    const reason = expedited ? (urgency.urgency_reason ?? campaign.urgency_reason) : ''
+    const deadline = expedited ? (urgency.urgency_deadline ?? campaign.urgency_deadline) : null
+    await tx`UPDATE reviewready.campaigns SET status='initial_review',submitted_with_warning=${forceReview},creator_override_at=${forceReview ? new Date() : null},readiness_state=NULL,review_score=NULL,review_level=NULL,review_breakdown=NULL,review_recommendation=NULL,review_routing_reason=NULL,expedited_requested=${expedited},urgency_reason=${reason},urgency_deadline=${deadline},priority_status=${expedited ? 'requested' : 'standard'},creator_submission_count=creator_submission_count+${forceReview ? 0 : 1},last_submitted_at=now(),updated_at=now() WHERE id=${id}`
     const payload = { type: 'CAMPAIGN_SUBMITTED', event_id: eventId, campaign_id: id, campaign_version: campaign.version, force_review: forceReview }
     await tx`INSERT INTO reviewready.submission_events (event_id,campaign_id,campaign_version,payload) VALUES (${eventId},${id},${campaign.version},${json(payload)})`
     await tx`INSERT INTO reviewready.review_packets (campaign_id,campaign_version,status,packet) VALUES (${id},${campaign.version},'pending',NULL) ON CONFLICT (campaign_id) DO UPDATE SET campaign_version=EXCLUDED.campaign_version,status='pending',packet=NULL,updated_at=now()`
@@ -216,17 +227,17 @@ async function submit(id: string, forceReview: boolean) {
     return { status: 'initial_review', event_id: eventId, submitted_with_readiness_warning: false, readiness_state: null }
   })
 }
-app.post('/campaigns/:id/submit', async (c) => { await rateLimit(c, 'campaign-submit', 6); return c.json(await submit(c.req.param('id'), false)) })
-app.post('/campaigns/:id/submit-as-is', async (c) => { await rateLimit(c, 'campaign-submit', 6); return c.json(await submit(c.req.param('id'), true)) })
+app.post('/campaigns/:id/submit', async (c) => { await rateLimit(c, 'campaign-submit', 6); return c.json(await submit(c.req.param('id'), false, urgencyInput.parse(await optionalJsonBody(c)))) })
+app.post('/campaigns/:id/submit-as-is', async (c) => { await rateLimit(c, 'campaign-submit', 6); return c.json(await submit(c.req.param('id'), true, urgencyInput.parse(await optionalJsonBody(c)))) })
 app.get('/campaigns/:id/readiness', async (c) => {
   const id = c.req.param('id'); const campaign = await campaignOr404(id); const docs = await documentsFor(id)
   const rows = await q`SELECT * FROM reviewready.readiness_analyses WHERE campaign_id=${id} ORDER BY created_at DESC LIMIT 1`
   if (!rows.length) fail(404, 'No readiness analysis yet')
   const analysis = rows[0]
   if (campaign.status === 'draft' && analysis.input_hash !== readinessHash(campaign)) fail(409, 'Readiness analysis is stale; run check-readiness')
-  const semantic = analysis.semantic_result; const requirements = campaign.status === 'draft' ? analysis.requirements_result : checkRequirements(campaign, docs)
+  const semantic = analysis.semantic_result; const requirements = checkRequirements(campaign, docs)
   const assessment = scoreReadiness(requirements, semantic); const feedback = creatorFeedbackPolicy(campaign, requirements, semantic, assessment)
-  return c.json({ readiness_state: campaign.readiness_state || analysis.overall_state, requirements, semantic_status: semantic.status, feedback_mode: feedback.mode, feedback_reason: feedback.reason, improvement_suggestions: feedback.suggestions, document_feedback: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'Some supporting material does not appear to align with the stated purpose. Please review the material you added.' : null, clarification_rounds: campaign.clarification_rounds, maximum_creator_returns: 1 })
+  return c.json({ readiness_state: campaign.readiness_state || analysis.overall_state, requirements, semantic_status: semantic.status, recommendation: campaign.review_recommendation || assessment.recommendation, assessment, feedback_mode: feedback.mode, feedback_reason: feedback.reason, improvement_suggestions: feedback.suggestions, document_feedback: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'Some supporting material does not appear to align with the stated purpose. Please review the material you added.' : null, clarification_rounds: campaign.clarification_rounds, creator_submission_count: campaign.creator_submission_count, maximum_creator_returns: 1 })
 })
 
 app.post('/internal/campaigns/:id/claim-processing', async (c) => {
@@ -262,8 +273,9 @@ app.post('/internal/campaigns/:id/final-analysis', async (c) => {
   const result = await sql.begin(async (tx) => {
     const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`; const campaign = rows[0]
     const eventRows = await tx`SELECT payload FROM reviewready.submission_events WHERE event_id=${payload.event_id}`; const forceReview = Boolean(eventRows[0]?.payload?.force_review)
-    const rounds = campaign.clarification_rounds; const route = decideSubmissionRoute(readiness.assessment, rounds, forceReview)
-    await tx`UPDATE reviewready.campaigns SET readiness_state=${readiness.readiness_state},review_score=${readiness.assessment.score},review_level=${readiness.assessment.level},submitted_with_warning=${route.forward_with_notes},review_routing_reason=${route.routing_reason},updated_at=now() WHERE id=${id}`
+    if (campaign.status === 'action_required') return { ...readiness, continue_to_packet: false, campaign_status: 'action_required', ops_review_status: 'not_run', assessment: readiness.assessment, clarification_round: campaign.clarification_rounds }
+    const rounds = campaign.clarification_rounds; const route = decideSubmissionRoute(readiness.assessment, rounds, forceReview, campaign.expedited_requested, campaign.creator_submission_count, readiness.requirements)
+    await tx`UPDATE reviewready.campaigns SET readiness_state=${readiness.readiness_state},review_score=${readiness.assessment.score},review_level=${readiness.assessment.level},review_breakdown=${tx.json(readiness.assessment.breakdown)},review_recommendation=${readiness.assessment.recommendation},submitted_with_warning=${route.forward_with_notes},review_routing_reason=${route.routing_reason},updated_at=now() WHERE id=${id}`
     if (!forceReview) await completeAutomation(tx, id, 'initial_ai_review', 'Submission check completed.')
     if (route.return_to_creator) {
       await tx`UPDATE reviewready.campaigns SET status='action_required',clarification_rounds=clarification_rounds+1,updated_at=now() WHERE id=${id}`
@@ -301,15 +313,19 @@ app.post('/internal/campaigns/:id/build-review-packet', async (c) => {
     if (docs.some((doc: any) => !doc.analyzed_at)) fail(409, 'Document processing is incomplete')
     const readinessRows = await tx`SELECT * FROM reviewready.readiness_analyses WHERE campaign_id=${id} AND input_hash=${readinessHash(campaign)} AND prompt_version=${PROMPT_VERSION}`
     if (!readinessRows.length) fail(409, 'Final analysis is missing')
-    const semantic = await latestReadiness(id); const hash = opsHash(campaign, docs, semantic)
+    // Reuse the readiness row already fetched in this transaction. Calling
+    // latestReadiness() here uses the global pool; with max: 1, the transaction
+    // holds the only connection and that nested query waits forever.
+    const semantic = readinessRows[0].semantic_result; const hash = opsHash(campaign, docs, semantic)
     const opsRows = await tx`SELECT result FROM reviewready.ops_review_analyses WHERE campaign_id=${id} AND input_hash=${hash} AND prompt_version=${OPS_PROMPT_VERSION}`
     if (!opsRows.length) fail(409, 'Detailed reviewer analysis is missing')
     const mismatch = docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low')
     const packet = {
       campaign: { id: campaign.id, title: campaign.title, profile_type: campaign.profile_type, category: campaign.category, goal_amount: String(campaign.goal_amount), story: campaign.story, beneficiary: campaign.beneficiary, beneficiary_relationship: campaign.beneficiary_relationship, fund_usage: campaign.fund_usage, fund_delivery: campaign.fund_delivery },
-      requirements: checkRequirements(campaign, docs), readiness_state: readinessRows[0].overall_state,
-      post_submission_reviewability: mismatch ? 'HIGH_FRICTION' : readinessRows[0].overall_state, ops_attention: mismatch ? 'POTENTIAL_MATERIAL_MISMATCH' : null,
-      semantic: readinessRows[0].semantic_result, internal_assessment: { score: campaign.review_score, level: campaign.review_level, clarification_rounds: campaign.clarification_rounds, review_attempt: Math.min(campaign.clarification_rounds + 1, 2), routing_reason: campaign.review_routing_reason, first_pass_threshold: 85, resubmission_threshold: 65, maximum_review_attempts: 2 },
+      requirements: checkRequirements(campaign, docs), readiness_state: campaign.readiness_state || readinessRows[0].overall_state,
+      post_submission_reviewability: mismatch ? 'HIGH_FRICTION' : (campaign.readiness_state || readinessRows[0].overall_state), ops_attention: mismatch ? 'POTENTIAL_MATERIAL_MISMATCH' : null,
+      semantic: readinessRows[0].semantic_result, internal_assessment: { score: campaign.review_score, level: campaign.review_level, recommendation: campaign.review_recommendation, breakdown: campaign.review_breakdown, creator_submission_count: campaign.creator_submission_count, clarification_rounds: campaign.clarification_rounds, routing_reason: campaign.review_routing_reason },
+      expedited_review: { requested: campaign.expedited_requested, reason: campaign.urgency_reason, deadline: campaign.urgency_deadline, priority_status: campaign.priority_status },
       ops_review: opsRows[0].result, documents: docs.map((doc: any) => ({ id: doc.id, document_type: doc.document_type, filename: doc.filename, analysis: doc.analysis })), submitted_with_warning: campaign.submitted_with_warning,
       creator_override: { used: Boolean(campaign.creator_override_at), at: campaign.creator_override_at, note: campaign.creator_override_at ? 'Creator chose to continue with the current information.' : null },
     }
@@ -351,7 +367,7 @@ app.post('/campaigns/:id/retry-processing', async (c) => {
     if (!previous.length) fail(409, 'No submission event to retry')
     await tx`UPDATE reviewready.campaigns SET status='initial_review',retry_attempts=retry_attempts+1,updated_at=now() WHERE id=${id}`
     const eventId = `evt_${uuid().replaceAll('-', '')}`
-    const payload = { type: 'CAMPAIGN_SUBMITTED', event_id: eventId, campaign_id: id, campaign_version: campaign.version, force_review: Boolean(campaign.submitted_with_warning) }
+    const payload = { type: 'CAMPAIGN_SUBMITTED', event_id: eventId, campaign_id: id, campaign_version: campaign.version, force_review: Boolean(campaign.creator_override_at), retry: true }
     await tx`INSERT INTO reviewready.submission_events (event_id,campaign_id,campaign_version,payload) VALUES (${eventId},${id},${campaign.version},${tx.json(payload)})`
     await tx`UPDATE reviewready.review_packets SET status='pending',packet=NULL,updated_at=now() WHERE campaign_id=${id}`
     await recordAutomation(tx, id, 'automation_retry', 'running', 'Retrying campaign preparation once.')
@@ -360,22 +376,38 @@ app.post('/campaigns/:id/retry-processing', async (c) => {
   return c.json(result)
 })
 
-app.get('/ops/reviews', async (c) => c.json(await q`SELECT c.id,c.title,c.category,CASE WHEN c.status='initial_review' AND c.updated_at < now()-interval '5 minutes' THEN 'automation_failed' ELSE c.status END AS status,c.readiness_state,c.submitted_with_warning,c.creator_override_at,r.status AS packet_status FROM reviewready.campaigns c LEFT JOIN reviewready.review_packets r ON r.campaign_id=c.id WHERE c.status IN ('initial_review','automation_failed','submitted','ready_for_review','ready_for_review_with_notes') ORDER BY c.updated_at DESC`))
+app.get('/ops/reviews', async (c) => c.json(await q`SELECT c.id,c.title,c.category,CASE WHEN c.status='initial_review' AND c.updated_at < now()-interval '5 minutes' THEN 'automation_failed' ELSE c.status END AS status,c.readiness_state,c.submitted_with_warning,c.creator_override_at,c.expedited_requested,c.urgency_deadline,c.priority_status,c.last_submitted_at,r.status AS packet_status FROM reviewready.campaigns c LEFT JOIN reviewready.review_packets r ON r.campaign_id=c.id WHERE c.status IN ('initial_review','automation_failed','submitted','ready_for_review','ready_for_review_with_notes') ORDER BY CASE WHEN c.priority_status='confirmed' THEN 0 ELSE 1 END, CASE WHEN c.priority_status='confirmed' THEN c.urgency_deadline END ASC NULLS LAST, c.last_submitted_at ASC NULLS LAST, c.created_at ASC`))
 app.get('/ops/reviews/:id', async (c) => {
   const id = c.req.param('id'); const campaign = await campaignOr404(id)
   const rows = await q`SELECT * FROM reviewready.review_packets WHERE campaign_id=${id}`
   const docs = await documentsFor(id); const actions = await q`SELECT id,action,note,created_at FROM reviewready.review_actions WHERE campaign_id=${id} ORDER BY created_at DESC,id DESC`
+  const priorityEvents = await q`SELECT id,priority_status,note,created_at FROM reviewready.priority_events WHERE campaign_id=${id} ORDER BY created_at DESC,id DESC`
   const notifications = await q`SELECT id,event_id,notification_kind,recipient,subject,body,delivery_status,created_at FROM reviewready.mock_email_notifications WHERE campaign_id=${id} ORDER BY created_at DESC`
   const semantic = await latestReadiness(id); const hash = opsHash(campaign, docs, semantic)
   const ops = await q`SELECT result FROM reviewready.ops_review_analyses WHERE campaign_id=${id} AND input_hash=${hash} AND prompt_version=${OPS_PROMPT_VERSION}`
-  if (!rows.length) return c.json({ campaign, packet: null, packet_status: campaign.status === 'automation_failed' ? 'failed' : 'pending', documents: docs, actions, notifications })
+  if (!rows.length) return c.json({ campaign, packet: null, packet_status: campaign.status === 'automation_failed' ? 'failed' : 'pending', documents: docs, actions, priority_events: priorityEvents, notifications })
   let packet = rows[0].packet
   if (packet) {
     const requirements = checkRequirements(campaign, docs); const assess = scoreReadiness(requirements, semantic)
-    packet = { ...packet, ops_review: ops[0]?.result || { status: 'not_run' }, requirements, internal_assessment: { score: campaign.review_score ?? assess.score, level: campaign.review_level || assess.level, clarification_rounds: campaign.clarification_rounds, review_attempt: Math.min(campaign.clarification_rounds + 1, 2), routing_reason: campaign.review_routing_reason, first_pass_threshold: 85, resubmission_threshold: 65, maximum_review_attempts: 2 }, documents: docs.map((doc: any) => ({ id: doc.id, document_type: doc.document_type, filename: doc.filename, analysis: doc.analysis })), ops_attention: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'POTENTIAL_MATERIAL_MISMATCH' : null }
+    packet = { ...packet, ops_review: ops[0]?.result || { status: 'not_run' }, requirements, internal_assessment: { score: campaign.review_score ?? assess.score, level: campaign.review_level || assess.level, recommendation: campaign.review_recommendation || assess.recommendation, breakdown: campaign.review_breakdown || assess.breakdown, creator_submission_count: campaign.creator_submission_count, clarification_rounds: campaign.clarification_rounds, routing_reason: campaign.review_routing_reason }, expedited_review: { requested: campaign.expedited_requested, reason: campaign.urgency_reason, deadline: campaign.urgency_deadline, priority_status: campaign.priority_status }, documents: docs.map((doc: any) => ({ id: doc.id, document_type: doc.document_type, filename: doc.filename, analysis: doc.analysis })), ops_attention: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'POTENTIAL_MATERIAL_MISMATCH' : null }
     packet.post_submission_reviewability = packet.ops_attention ? 'HIGH_FRICTION' : packet.readiness_state
   }
-  return c.json({ ...rows[0], packet, campaign, documents: docs, actions, notifications })
+  return c.json({ ...rows[0], packet, campaign, documents: docs, actions, priority_events: priorityEvents, notifications })
+})
+app.post('/ops/reviews/:id/priority', async (c) => {
+  const id = c.req.param('id'); const payload = priorityInput.parse(await jsonBody(c))
+  const result = await sql.begin(async (tx) => {
+    const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`
+    if (!rows.length) fail(404, 'Campaign not found')
+    const campaign = rows[0]
+    if (!campaign.expedited_requested) fail(409, 'This campaign did not request expedited review')
+    if (!['submitted', 'ready_for_review', 'ready_for_review_with_notes'].includes(campaign.status)) fail(409, 'Priority can be triaged when the campaign enters review')
+    if (campaign.priority_status === payload.priority_status) return { priority_status: campaign.priority_status, unchanged: true }
+    await tx`UPDATE reviewready.campaigns SET priority_status=${payload.priority_status},updated_at=now() WHERE id=${id}`
+    await tx`INSERT INTO reviewready.priority_events (id,campaign_id,priority_status,note) VALUES (${uuid()},${id},${payload.priority_status},${payload.note.trim()})`
+    return { priority_status: payload.priority_status, unchanged: false }
+  })
+  return c.json(result)
 })
 app.post('/ops/reviews/:id/refresh-ai', async (c) => {
   await rateLimit(c, 'review-refresh', 10)

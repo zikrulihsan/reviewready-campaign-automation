@@ -55,12 +55,13 @@ Open the local Netlify Dev URL, normally `http://localhost:8888`. The Vite app a
 
 ## Submission lifecycle
 
-1. The API validates required fields and saves the campaign and a `CAMPAIGN_SUBMITTED` event in one database transaction.
+1. The API saves the campaign and a `CAMPAIGN_SUBMITTED` event in one database transaction. Missing campaign details become review notes rather than blocking submission.
 2. The API immediately responds to the creator. A Supabase Database Webhook asynchronously starts n8n.
 3. n8n claims the event, requests deterministic and AI checks from the TypeScript API, then requests API persistence of the reviewer packet.
-4. If one clarification would materially help, the campaign returns to the creator. A second submission, or **Submit as it is**, enters the queue with remaining findings attached.
-5. n8n prepares a mock email record. It is visible on the reviewer campaign page, but no email is sent.
-6. Reviewers can continue, request more information, or escalate. The system never approves or rejects a campaign automatically.
+4. A reviewability assessment scores completeness (30 points), clarity (50), and consistency (20). If one clarification would materially help, the creator sees a recommendation and can update the campaign or use **Submit as it is**. A second creator submission enters the queue with remaining findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score.
+5. The **Urgent? Submit for an expedited review** toggle sends a time-sensitive submission directly to human review with any gaps attached. It records a priority request, not an automatic queue jump. Reviewers confirm expedited priority or keep the campaign in the standard queue. The reason and deadline are optional and review timing is not guaranteed.
+6. n8n prepares a mock email record. It is visible on the reviewer campaign page, but no email is sent.
+7. Reviewers can continue, request more information, or escalate. The system never approves or rejects a campaign automatically.
 
 ## Operational behavior
 

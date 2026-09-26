@@ -3,13 +3,6 @@
 .env.*
 !.env.example
 
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-venv/
-
 # Dependencies and frontend build output
 node_modules/
 web/node_modules/
@@ -26,3 +19,6 @@ web/dist/
 *.sqlite3
 postgres_data/
 n8n_data/
+
+# Local Netlify folder
+.netlify
