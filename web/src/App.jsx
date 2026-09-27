@@ -6,7 +6,31 @@ import { ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, CircleAlert, 
 const categories = { medical: 'Medical', education: 'Education', rent: 'Housing / rent', travel: 'Travel', business_product: 'Business / product', refugee_asylum: 'Refugee / asylum', vehicle: 'Vehicle', other: 'Other' }
 const profiles = { self: 'Myself', behalf_of_other: 'Someone else', organization: 'Organization' }
 const docLabels = { organizer_id: 'Campaign creator ID', beneficiary_id: 'Beneficiary ID', recent_bank_statement: 'Recent bank statement', organization_registration: 'Organization registration', medical_supporting_evidence: 'Medical supporting evidence', signed_rental_agreement: 'Signed rental agreement', accommodation_invoice: 'Accommodation invoice', flight_invoice: 'Flight invoice', vehicle_quote_or_purchase_agreement: 'Vehicle quote / purchase agreement', student_id: 'Student ID', acceptance_letter: 'Acceptance letter' }
-const fieldLabels = { title: 'Campaign title', story: 'Campaign story', beneficiary: 'Beneficiary', beneficiary_relationship: 'Relationship to beneficiary', fund_usage: 'Use of funds', fund_delivery: 'How funds will be delivered', goal_amount: 'Funding goal', travel_purpose: 'Purpose of travel', destination: 'Destination' }
+const fieldLabels = { profile_type: 'Creator profile', category: 'Campaign category', title: 'Campaign title', story: 'Campaign story', beneficiary: 'Beneficiary', beneficiary_relationship: 'Relationship to beneficiary', fund_usage: 'Use of funds', fund_delivery: 'How funds will be delivered', goal_amount: 'Funding goal', travel_purpose: 'Purpose of travel', destination: 'Destination' }
+const reviewerSourceLabels = {
+  'campaign.profile_type': 'Creator profile', 'campaign.category': 'Campaign category',
+  'campaign.title': 'Campaign title', 'campaign.story': 'Campaign story',
+  'campaign.goal_amount': 'Funding goal', 'campaign.beneficiary': 'Beneficiary',
+  'campaign.beneficiary_relationship': 'Relationship to beneficiary',
+  'campaign.fund_usage': 'Use of funds', 'campaign.fund_delivery': 'How funds will be delivered',
+  'campaign.travel_purpose': 'Purpose of travel', 'campaign.destination': 'Destination',
+  'pre_submit_readiness.issues': 'Earlier clarity notes',
+  'campaign_field_checks.missing_fields': 'Missing campaign details',
+  'campaign_field_checks.invalid_fields': 'Details needing correction',
+}
+function reviewerText(value) {
+  return String(value ?? '').trim().replace(/\b(?:campaign|pre_submit_readiness|campaign_field_checks)\.[a-z_]+(?:\.[a-z_]+)?\b/g, path =>
+    reviewerSourceLabels[path] || path.split('.').slice(1).join(' ').replaceAll('_', ' '))
+}
+function providedFact(value, campaign) {
+  const path = String(value ?? '').trim()
+  if (!path.startsWith('campaign.') || !reviewerSourceLabels[path]) return reviewerText(value)
+  const key = path.slice('campaign.'.length)
+  const raw = campaign?.[key]
+  if (raw == null || String(raw).trim() === '') return ''
+  const formatted = key === 'goal_amount' ? money(raw) : key === 'profile_type' ? profiles[raw] || raw : key === 'category' ? categories[raw] || raw : String(raw).trim()
+  return `${reviewerSourceLabels[path]}: ${formatted.length > 160 ? formatted.slice(0, 157) + '…' : formatted}`
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } })
@@ -33,24 +57,27 @@ function Loading() { return <div className="loading"><span className="spinner" /
 
 function OpsFindings({ findings, emptyText }) {
   if (!findings?.length) return <p className="muted">{emptyText}</p>
-  return <div className="ops-findings">{findings.map((finding, index) => <article className="ops-finding" key={index}><div className="ops-finding-head"><strong>{finding.topic}</strong><span className={'ops-priority ' + finding.priority}>{finding.priority} priority</span></div><p>{finding.observation}</p><small><b>Evidence:</b> {finding.evidence}</small><small><b>Ask:</b> {finding.reviewer_question}</small></article>)}</div>
+  const priorityOrder = { high: 0, medium: 1, low: 2 }
+  return <div className="ops-findings">{[...findings].sort((a, b) => (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3)).map((finding, index) => <article className="ops-finding" key={index}><div className="ops-finding-head"><strong>{reviewerText(finding.topic)}</strong><span className={'ops-priority ' + finding.priority}>{({ high: 'Check first', medium: 'Check', low: 'For context' })[finding.priority] || 'Check'}</span></div><p>{reviewerText(finding.observation)}</p>{finding.evidence && <div className="ops-evidence"><b>From the submission</b><span>{reviewerText(finding.evidence)}</span></div>}{finding.reviewer_question && <div className="ops-question"><b>Question to consider</b><span>{reviewerText(finding.reviewer_question)}</span></div>}</article>)}</div>
 }
 
-function OpsReviewSections({ review, onRun, busy }) {
+function OpsReviewSections({ review, campaign, needsUpdate, onRun, busy }) {
   const available = review?.status === 'complete'
+  const findingCount = (review?.campaign_findings?.length || 0) + (review?.completeness_findings?.length || 0)
+  const provided = [...new Set((review?.provided_information || []).filter(item => !/pre_submit_readiness\.issues/i.test(item)).map(item => providedFact(item, campaign)).filter(Boolean))]
   return <>
-    <section className="panel review-panel"><div className="panel-heading"><div><div className="eyebrow">CAMPAIGN NOTES</div><h2>Points to consider</h2><p>Purpose, beneficiary, use of funds, delivery plan, and internal consistency.</p></div></div>
-      {!available ? <div className="ops-empty"><p>{review?.status === 'unavailable' ? 'Notes are unavailable right now. You can continue or try again.' : 'Notes have not been prepared for this version yet.'}</p><button className="button secondary" disabled={busy} onClick={onRun}>{busy ? 'Reviewing…' : 'Prepare notes'}</button></div> : <><p className="ops-summary">{review.campaign_summary}</p><OpsFindings findings={review.campaign_findings} emptyText="No additional campaign concerns were identified. Review the original information before deciding next steps." /></>}
+    <section className="panel review-panel"><div className="panel-heading"><div><div className="eyebrow">AI REVIEW BRIEF</div><h2>Points to check</h2><p>AI notes are a starting point. Compare each point with the campaign and documents before deciding.</p></div>{available && needsUpdate && <button className="button secondary" disabled={busy} onClick={onRun}>{busy ? 'Updating…' : 'Prepare clearer notes'}</button>}</div>
+      {!available ? <div className="ops-empty"><p>{review?.status === 'unavailable' ? 'Notes are unavailable right now. You can continue or try again.' : 'Notes have not been prepared for this version yet.'}</p><button className="button secondary" disabled={busy} onClick={onRun}>{busy ? 'Reviewing…' : 'Prepare notes'}</button></div> : <><div className="ops-brief-count">{findingCount ? `${findingCount} ${findingCount === 1 ? 'point' : 'points'} to check` : 'No specific concerns raised by AI'}</div><p className="ops-summary">{reviewerText(review.campaign_summary)}</p><OpsFindings findings={review.campaign_findings} emptyText="No specific concerns were identified here. Read the campaign details before deciding." /></>}
     </section>
-    <section className="panel review-panel"><div className="panel-heading"><div><div className="eyebrow">FOLLOW-UP</div><h2>Information completeness</h2><p>What is provided and what may need follow-up.</p></div></div>
-      {!available ? <p className="muted">Prepare notes to see possible information gaps.</p> : <><p className="ops-summary">{review.completeness_summary}</p>{review.provided_information?.length > 0 && <div className="ops-provided"><strong>Already provided</strong><ul>{review.provided_information.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}<h3 className="ops-subheading">Possible follow-up</h3><OpsFindings findings={review.completeness_findings} emptyText="No additional information gaps were identified." /></>}
+    <section className="panel review-panel"><div className="panel-heading"><div><div className="eyebrow">FOLLOW-UP</div><h2>Information gaps</h2><p>Focus on details that would help you make a decision.</p></div></div>
+      {!available ? <p className="muted">Prepare notes to see possible information gaps.</p> : <><p className="ops-summary">{reviewerText(review.completeness_summary)}</p><OpsFindings findings={review.completeness_findings} emptyText="No additional information gaps were identified." />{provided.length > 0 && <details className="ops-provided"><summary>Information already supplied <span>{provided.length} items</span></summary><ul>{provided.map((item, index) => <li key={index}>{item}</li>)}</ul></details>}</>}
     </section>
   </>
 }
 
 function Shell({ role, children }) {
   const creator = role === 'creator'
-  return <div className="app-shell">
+  return <div className={'app-shell ' + role + '-shell'}>
     <aside className="sidebar">
       <Link className="brand" to={creator ? '/creator' : '/reviewer'}><span className="brand-mark"><Check size={20} strokeWidth={2.5} /></span><span>reviewready<small>CAMPAIGN WORKSPACE</small></span></Link>
       <div className="workspace-tag"><span className={'role-mark ' + role}>{creator ? <FilePlus2 size={17} /> : <ShieldCheck size={17} />}</span><div><strong>{creator ? 'Campaign creator' : 'Review team'}</strong><small>{creator ? 'Submission workspace' : 'Review workspace'}</small></div></div>
@@ -105,7 +132,7 @@ function ReviewQueue() {
   const [error, setError] = useState('')
   async function refresh() { try { setItems(await api('/ops/reviews')); setError('') } catch (e) { setError(e.message) } }
   useEffect(() => { refresh() }, [])
-  const filtered = (items || []).filter(item => (filter === 'all' || (filter === 'ready' ? ['ready_for_review', 'ready_for_review_with_notes', 'submitted'].includes(item.status) : filter === 'pending' ? item.status === 'initial_review' : filter === 'verification' ? ['awaiting_identity', 'identity_review'].includes(item.status) : filter === 'changes' ? item.status === 'action_required' : item.priority_status === 'requested')) && displayTitle(item.title).toLowerCase().includes(query.toLowerCase()))
+  const filtered = (items || []).filter(item => (filter === 'all' || (filter === 'ready' ? ['ready_for_review', 'ready_for_review_with_notes', 'submitted'].includes(item.status) : filter === 'pending' ? ['initial_review', 'automation_failed'].includes(item.status) : filter === 'verification' ? ['awaiting_identity', 'identity_review'].includes(item.status) : filter === 'changes' ? item.status === 'action_required' : item.priority_status === 'requested')) && displayTitle(item.title).toLowerCase().includes(query.toLowerCase()))
   return <Shell role="reviewer"><div className="page-heading"><div><div className="eyebrow">REVIEW QUEUE</div><h1>Incoming submissions</h1><p>Browse submitted campaigns for review.</p></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Refresh</button></div>
     <div className="toolbar"><div className="search"><Search size={18} /><input aria-label="Search campaigns" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search campaign titles…" /></div><div className="filter-tabs">{[['all','All'],['ready','Review'],['verification','Verification'],['changes','Changes'],['pending','Processing'],['priority','Priority']].map(([key,label]) => <button className={filter === key ? 'active' : ''} key={key} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
     {error && <Notice tone="error">{error}</Notice>}{!items && !error ? <Loading /> : filtered.length ? <ReviewTable items={filtered} /> : <Empty icon={ClipboardList} title="No submissions found" text={items?.length ? 'Try another search or filter.' : 'Submitted campaigns will appear here.'} />}
@@ -185,7 +212,7 @@ function ReviewDetail() {
   const ops = packet?.ops_review || { status: 'not_run' }
   const assessment = packet?.internal_assessment || {}
   const levelLabel = ({ strong: 'Strong', reviewable: 'Reviewable', needs_attention: 'Needs attention', unavailable: 'Analysis unavailable' })[assessment.level] || 'Pending'
-  const missing = [...(req.missing_fields || []).map(x => 'Field: ' + (fieldLabels[x] || x)), ...(req.invalid_fields || []).map(x => x)]
+  const missing = [...(req.missing_fields || []).map(x => 'Missing: ' + (fieldLabels[x] || reviewerText(x))), ...(req.invalid_fields || []).map(x => 'Needs correction: ' + (fieldLabels[x] || reviewerText(x)))]
   const inContentReview = ['ready_for_review', 'ready_for_review_with_notes', 'submitted'].includes(campaign.status)
   const inVerification = ['awaiting_identity', 'identity_review'].includes(campaign.status)
   const checkLabels = { identity: 'Personal ID checked against organizer', beneficiary: 'Beneficiary and relationship verified', funds_path: 'Receiving account and funds path verified', sanctions: 'Sanctions / risk screening completed', guidelines: 'Story and cause meet campaign guidelines' }
@@ -203,7 +230,7 @@ function ReviewDetail() {
       {campaign.status === 'automation_failed' || data.packet_status === 'failed' ? <Notice tone="error">Automated preparation paused. You can inspect the campaign now; the creator can retry preparation once.</Notice> : campaign.status === 'initial_review' && <Notice>Review details are being prepared. You can inspect the campaign information below now.</Notice>}
       <div className="review-layout"><div className="review-main">
         <section className="panel review-panel"><div className="panel-heading"><div><div className="eyebrow">01 / INFORMATION</div><h2>Campaign overview</h2></div></div><div className="detail-block"><span>Campaign story</span><p>{campaign.story || 'Not provided'}</p></div><div className="detail-pair"><div><span>Beneficiary</span><strong>{campaign.beneficiary || '—'}</strong></div><div><span>Relationship</span><strong>{campaign.beneficiary_relationship || '—'}</strong></div></div><div className="detail-block"><span>Use of funds</span><p>{campaign.fund_usage || 'Not provided'}</p></div><div className="detail-block"><span>How funds will be delivered</span><p>{campaign.fund_delivery || 'Not provided'}</p></div>{campaign.category === 'travel' && <div className="detail-pair"><div><span>Purpose of travel</span><strong>{campaign.travel_purpose || '—'}</strong></div><div><span>Destination</span><strong>{campaign.destination || '—'}</strong></div></div>}</section>
-        <OpsReviewSections review={ops} onRun={runOpsReview} busy={aiBusy} />
+        <OpsReviewSections review={ops} campaign={campaign} needsUpdate={packet?.ops_review_needs_update} onRun={runOpsReview} busy={aiBusy} />
         <section className="panel review-panel">
           <div className="panel-heading"><div><div className="eyebrow">04 / EVIDENCE</div><h2>Document review</h2><p>Open the file, compare it with the campaign, then record a decision for each document.</p></div></div>
           {data.documents?.length ? <div className="document-review-list">{data.documents.map(doc => <article className="document-review" key={doc.id}>
@@ -214,7 +241,7 @@ function ReviewDetail() {
               {doc.file_size && (inContentReview || inVerification) && <div className="document-decision"><label>Note for creator if changes are needed<textarea rows="2" value={documentNotes[doc.id] ?? doc.reviewer_note ?? ''} onChange={e => setDocumentNotes(current => ({ ...current, [doc.id]: e.target.value }))} placeholder="Explain what is missing or unreadable" /></label><div><button className="button primary" disabled={documentBusy === doc.id} onClick={() => reviewDocument(doc.id, 'accepted')}>Accept file</button><button className="button secondary" disabled={documentBusy === doc.id || !(documentNotes[doc.id] ?? doc.reviewer_note ?? '').trim()} onClick={() => reviewDocument(doc.id, 'rejected')}>Request replacement</button></div></div>}
             </div></article>)}</div> : <p className="muted">No supporting documents yet. You can request them from the creator.</p>}
         </section>
-      </div><aside className="review-side"><div className="context-card"><div className="eyebrow">REVIEW SUMMARY</div><h3>Required campaign fields</h3>{!packet ? <p className="muted">The summary appears when processing is complete.</p> : missing.length ? <div className="side-list">{missing.map((item,i) => <div key={i}><CircleAlert size={16} />{item}</div>)}</div> : <div className="side-success"><CheckCircle2 size={18} /> Required campaign fields complete</div>}</div><div className="context-card"><div className="eyebrow">EARLIER NOTES</div><h3>Earlier clarity notes</h3>{!packet ? <p className="muted">Preparing the notes.</p> : sem.status === 'unavailable' ? <p className="muted">Earlier notes are unavailable. Continue with the campaign information.</p> : sem.issues?.length ? <div className="side-list">{sem.issues.map((issue,i) => <div key={i}><CircleAlert size={16} />{issue.feedback || issue.evidence || issue.type}</div>)}</div> : <p className="muted">No major clarity issues found.</p>}</div>{inVerification && <div className="context-card"><div className="eyebrow">FINAL VERIFICATION</div><h3>Before publication</h3><p className="muted">Record checks you completed yourself. AI notes do not count as verification.</p>
+      </div><aside className="review-side"><div className="context-card"><div className="eyebrow">REVIEW SUMMARY</div><h3>Required campaign details</h3>{!packet ? <p className="muted">The summary appears when processing is complete.</p> : missing.length ? <div className="side-list">{missing.map((item,i) => <div key={i}><CircleAlert size={16} />{item}</div>)}</div> : <div className="side-success"><CheckCircle2 size={18} /> Required campaign details complete</div>}</div><div className="context-card"><div className="eyebrow">EARLIER NOTES</div><h3>Earlier clarity notes</h3>{!packet ? <p className="muted">Preparing the notes.</p> : sem.status === 'unavailable' ? <p className="muted">Earlier notes are unavailable. Continue with the campaign information.</p> : sem.issues?.length ? <div className="side-list">{sem.issues.map((issue,i) => <div key={i}><CircleAlert size={16} />{reviewerText(issue.feedback || issue.evidence || String(issue.type || 'Clarity issue').replaceAll('_', ' '))}</div>)}</div> : <p className="muted">No major clarity issues found.</p>}</div>{inVerification && <div className="context-card"><div className="eyebrow">FINAL VERIFICATION</div><h3>Before publication</h3><p className="muted">Record checks you completed yourself. AI notes do not count as verification.</p>
         {missingDocumentTypes.length > 0 && <p>Accept required files: {missingDocumentTypes.map(docName).join(', ')}.</p>}{missingOneOf && <p>Accept one of: {req.one_of_documents.map(docName).join(' / ')}.</p>}
         {Object.entries(checkLabels).map(([key,label]) => <label className="verification-check" key={key}><input type="checkbox" checked={Boolean(campaign.verification_checks?.[key])} disabled={Boolean(checkBusy)} onChange={e => setCheck(key, e.target.checked)} /><span>{label}</span></label>)}
         <p className="muted">For this prototype, use sample identity documents and simulated external checks.</p>

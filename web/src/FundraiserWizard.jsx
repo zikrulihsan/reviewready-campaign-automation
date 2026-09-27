@@ -162,7 +162,7 @@ export default function FundraiserWizard() {
     setError(''); setNotice(''); setBusy('override')
     try {
       const result = await request('/campaigns/' + encodeURIComponent(campaignId) + '/submit-as-is', { method: 'POST', body: JSON.stringify({ expedited_requested: form.expedited_requested, urgency_reason: form.urgency_reason, urgency_deadline: form.urgency_deadline || null }) })
-      setCampaignStatus(result.status); setNotice('Your campaign is being added to the queue with the current notes attached.')
+      setCampaignStatus(result.status); setNotice('We’re checking your submission with the current notes attached.')
       await loadCampaign(campaignId)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -189,12 +189,22 @@ export default function FundraiserWizard() {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  async function removeDocument(documentId) {
+    setError(''); setNotice(''); setBusy('document')
+    try {
+      await request('/campaigns/' + encodeURIComponent(campaignId) + '/documents/' + encodeURIComponent(documentId), { method: 'DELETE' })
+      await loadCampaign(campaignId)
+      setNotice('File removed. You can upload a more relevant file before submitting again.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   if (loading) return <div className="fund-loading">Loading campaign…</div>
   const suggestions = readiness?.improvement_suggestions || (readiness?.semantic?.issues || []).map(item => item.feedback || item.evidence).filter(Boolean)
   const feedbackMode = readiness?.feedback_mode || 'targeted'
+  const severeFeedback = readiness?.recommendation === 'strong_correction' || Boolean(readiness?.document_feedback)
   const missingBeforeSubmit = (requirements?.required_fields || []).filter(key => key === 'goal_amount' ? Number(form.goal_amount) <= 0 : !String(form[key] || '').trim())
   const missingAfterSubmit = readiness?.requirements?.missing_fields || []
-  const readyNotes = isReady && campaignStatus === 'ready_for_review_with_notes' && (missingAfterSubmit.length > 0 || suggestions.length > 0) ? <div className="fund-readiness"><strong>Notes sent to the reviewer</strong><p>{readiness?.creator_submission_count ? `Creator submission ${readiness.creator_submission_count}. ` : ''}These details may come up during review. Your campaign is already in the queue.</p>{missingAfterSubmit.length > 0 && <p>Missing: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>)}</div> : null
+  const readyNotes = isReady && campaignStatus === 'ready_for_review_with_notes' && (missingAfterSubmit.length > 0 || suggestions.length > 0 || readiness?.document_feedback) ? <div className="fund-readiness"><strong>Notes sent to the reviewer</strong><p>{readiness?.creator_submission_count ? `Creator submission ${readiness.creator_submission_count}. ` : ''}These details may come up during review. Your campaign is already in the queue.</p>{missingAfterSubmit.length > 0 && <p>Missing: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{readiness?.document_feedback && <div><CircleAlert size={15} />{readiness.document_feedback}</div>}{suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>)}</div> : null
   const updateUrgency = (key, value) => setForm(current => ({ ...current, [key]: value }))
   const urgencyFields = <div className="fund-urgency"><label className="fund-urgency-toggle"><span><strong>Urgent?</strong><small>Submit for an expedited review</small></span><input type="checkbox" checked={Boolean(form.expedited_requested)} onChange={e => updateUrgency('expedited_requested', e.target.checked)} /></label>{form.expedited_requested && <><p>Choose this for a time-sensitive need. A reviewer will consider the request; a faster review is not guaranteed.</p><div className="fund-grid"><Input label="Reason for urgency (optional)" value={form.urgency_reason} onChange={v => updateUrgency('urgency_reason', v.slice(0, 500))} placeholder="What makes this time-sensitive?" /><Input label="Deadline (optional)" type="date" value={form.urgency_deadline} onChange={v => updateUrgency('urgency_deadline', v)} /></div></>}</div>
 
@@ -228,8 +238,8 @@ export default function FundraiserWizard() {
         {automationFailed && <div className="fund-readiness"><strong>Preparation did not finish</strong><p>Your campaign is saved. Retry the preparation once.</p><button className="fund-next" disabled={Boolean(busy)} onClick={retryProcessing}>{busy === 'retry' ? 'Retrying…' : 'Retry preparation'} <ArrowRight size={18} /></button></div>}
         {needsAction && <div className="fund-readiness">
           <strong>{feedbackSource === 'reviewer' ? 'Feedback from the review team' : 'AI review suggestions'}</strong>
-          {feedbackSource === 'reviewer' ? <p>{humanFeedback || 'The reviewer asked for more information.'}</p> : <><p>A few details could help the reviewer understand your request. You may update them or continue with the current information.</p>{missingAfterSubmit.length > 0 && <p>Missing details: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>)}</>}
-          <div className="fund-soft-gate"><button className="fund-next" onClick={() => { setNotice(''); setStage(2) }}>Update campaign</button>{feedbackSource !== 'reviewer' && <button className="fund-outline" disabled={Boolean(busy)} onClick={submitAsIs}>{busy === 'override' ? 'Submitting…' : 'Submit as it is'} <ArrowRight size={18} /></button>}</div>
+          {feedbackSource === 'reviewer' ? <p>{humanFeedback || 'The reviewer asked for more information.'}</p> : <><p>{severeFeedback ? 'These details need another look before human review.' : 'A few details could help the reviewer understand your request. You may update them or continue with the current information.'}{severeFeedback && readiness?.creator_submission_count >= 2 ? ' Your next submission will enter the human review queue with any remaining notes.' : ''}</p>{missingAfterSubmit.length > 0 && <p>Missing details: {missingAfterSubmit.map(name => documentName(name)).join(', ')}.</p>}{readiness?.document_feedback && <div><CircleAlert size={15} />{readiness.document_feedback}</div>}{suggestions.map((item, index) => <div key={index}><CircleAlert size={15} />{item}</div>)}</>}
+          <div className="fund-soft-gate"><button className="fund-next" onClick={() => { setNotice(''); setStage(2) }}>Update campaign</button>{feedbackSource !== 'reviewer' && !severeFeedback && <button className="fund-outline" disabled={Boolean(busy)} onClick={submitAsIs}>{busy === 'override' ? 'Submitting…' : 'Submit as it is'} <ArrowRight size={18} /></button>}</div>
         </div>}
         {isReady && <div className="fund-submitted"><CheckCircle2 size={22} /><span><strong>In the human review queue</strong><small>Reviewers can read your story, open each uploaded document, and send specific feedback.</small></span></div>}
         {readyNotes}
@@ -239,7 +249,7 @@ export default function FundraiserWizard() {
           <h2 className="fund-follow-heading">Documents for human review</h2>
           <p className="fund-help">Prototype only: upload synthetic PDF, PNG, or JPEG files up to 2 MB. Do not upload a real personal ID or bank statement.</p>
           <div className="fund-doc-list">{suggestedDocuments.map((item, index) => <div key={index} className={item.done ? 'complete' : ''}>{item.done ? <CheckCircle2 size={18} /> : <FileText size={18} />}<span>{item.name}</span><small>{item.done ? 'Uploaded' : 'Needed before live'}</small></div>)}</div>
-          {supporting.length > 0 && <div className="fund-uploaded"><strong>Uploaded files</strong>{supporting.map(item => <div key={item.id}><span>{item.filename} · {documentName(item.document_type)}</span><small>{item.review_status === 'accepted' ? 'Accepted' : item.review_status === 'rejected' ? 'Changes requested' : 'Awaiting reviewer'}{item.reviewer_note ? ` — ${item.reviewer_note}` : ''}</small></div>)}</div>}
+          {supporting.length > 0 && <div className="fund-uploaded"><strong>Uploaded files</strong>{supporting.map(item => <div key={item.id}><span>{item.filename} · {documentName(item.document_type)}</span><small>{item.review_status === 'accepted' ? 'Accepted' : item.review_status === 'rejected' ? 'Changes requested' : 'Awaiting reviewer'}{item.reviewer_note ? ` — ${item.reviewer_note}` : ''}</small>{needsAction && <button className="fund-outline" disabled={Boolean(busy)} onClick={() => removeDocument(item.id)}>Remove file</button>}</div>)}</div>}
           <Select label="Document type" value={doc.document_type} onChange={v => setDoc(current => ({ ...current, document_type: v, extracted_text: '' }))} options={Object.fromEntries([...new Set([...(requirements?.required_documents || []), ...(requirements?.one_of_documents || []), ...Object.keys(documents)])].map(type => [type, documentName(type)]))} />
           <label className="fund-field"><span>Choose a sample file *</span><input key={docFile?.name || 'empty'} type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => setDocFile(e.target.files?.[0] || null)} /></label>
           {!['organizer_id', 'beneficiary_id', 'recent_bank_statement'].includes(doc.document_type) && <Input label="Optional document excerpt for AI notes" multiline value={doc.extracted_text} onChange={v => setDoc(current => ({ ...current, extracted_text: v }))} placeholder="Optional text copied from this document" />}

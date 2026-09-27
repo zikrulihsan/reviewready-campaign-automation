@@ -61,12 +61,16 @@ pnpm dev
 
 Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite proxies API requests to the local Netlify Functions server on port 8888. Both use the configured Supabase project; only use synthetic prototype content.
 
+## End-to-end testing
+
+See [the end-to-end scenario matrix and latest run results](docs/e2e-test-scenarios.md). Notification-specific checks are in [the delivery test plan](docs/notification-e2e-test-plan.md).
+
 ## Submission lifecycle
 
 1. The API saves the campaign and a `CAMPAIGN_SUBMITTED` event in one database transaction. Missing campaign details become review notes rather than blocking submission.
 2. The API immediately responds to the creator. A Supabase Database Webhook asynchronously starts n8n.
 3. n8n claims the event, requests deterministic and AI checks from the TypeScript API, then requests API persistence of the reviewer packet.
-4. A reviewability assessment scores completeness (30 points), clarity (50), and consistency (20). If one clarification would materially help, the creator sees a recommendation and can update the campaign or use **Submit as it is**. A second creator submission enters the queue with remaining findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score.
+4. A reviewability assessment scores completeness (30 points), clarity (50), and consistency (20). The first submission may be returned for clarification. On the second submission, mild gaps enter the human review queue, while a strong correction finding or a supporting document with low relevance may be returned once more. The third creator submission enters the queue with remaining findings attached. **Submit as it is** is offered for mild gaps and counts as a creator submission. Expedited submissions go to human review with findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score.
 5. The **Urgent? Submit for an expedited review** toggle sends a time-sensitive submission directly to human review with any gaps attached. It records a priority request, not an automatic queue jump. Reviewers confirm expedited priority or keep the campaign in the standard queue. The reason and deadline are optional and review timing is not guaranteed.
 6. The creator enters an email address before submission. The API queues status emails for that address and a Slack alert for the reviewer channel when the packet is ready. A scheduled Netlify function retries failed deliveries.
 7. The reviewer reads the full story, opens actual uploaded PDF/image files, and accepts or rejects each document with a note. They can request changes; the creator sees the note, updates the story or files, and resubmits. Human feedback can repeat as needed.

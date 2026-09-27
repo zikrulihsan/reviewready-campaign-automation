@@ -83,13 +83,18 @@ export function scoreReadiness(requirements: any, semantic: any) {
   }
 }
 
-export function decideSubmissionRoute(assessment: any, rounds: number, forceReview = false, expeditedRequested = false, creatorAttempts = 1, requirements: any = {}) {
-  const needsClarification = ['strong_correction', 'targeted_clarification'].includes(assessment.recommendation)
-  const return_to_creator = needsClarification && !forceReview && !expeditedRequested && rounds < 1 && creatorAttempts < 2
-  const hasNotes = (requirements.missing_fields?.length || 0) > 0 || (requirements.invalid_fields?.length || 0) > 0 || assessment.finding_count > 0 || assessment.recommendation !== 'ready'
+export function decideSubmissionRoute(assessment: any, rounds: number, forceReview = false, expeditedRequested = false, creatorAttempts = 1, requirements: any = {}, hasIrrelevantDocument = false) {
+  const severe = assessment.recommendation === 'strong_correction' || hasIrrelevantDocument
+  const needsClarification = severe || assessment.recommendation === 'targeted_clarification'
+  const return_to_creator = !expeditedRequested && rounds < 2 && (
+    creatorAttempts === 1 && needsClarification && !forceReview ||
+    creatorAttempts === 2 && severe
+  )
+  const hasNotes = hasIrrelevantDocument || (requirements.missing_fields?.length || 0) > 0 || (requirements.invalid_fields?.length || 0) > 0 || assessment.finding_count > 0 || assessment.recommendation !== 'ready'
   const forward_with_notes = !return_to_creator && (forceReview || hasNotes)
-  const routing_reason = forceReview ? 'creator_override' : expeditedRequested ? 'expedited_request' :
-    needsClarification && rounds >= 1 ? 'clarification_limit_reached' :
+  const routing_reason = return_to_creator && creatorAttempts === 2 ? 'severe_second_clarification' :
+    forceReview && !return_to_creator ? 'creator_override' : expeditedRequested ? 'expedited_request' :
+    needsClarification && creatorAttempts >= 3 ? 'clarification_limit_reached' :
     assessment.recommendation === 'analysis_unavailable' ? 'analysis_unavailable' :
     forward_with_notes ? 'findings_attached' : null
   return { return_to_creator, forward_with_notes, routing_reason }

@@ -148,7 +148,10 @@ async function verifiedJob(campaignId: string, payload: any) {
 app.onError((err, c) => {
   const status = (err as any).status || (err instanceof ZodError ? 422 : 500)
   if (status >= 500) console.error('API request failed:', err.name, (err as any).code || '')
-  return c.json({ detail: status === 500 ? 'The request failed. Please try again.' : err.message }, status as any)
+  const detail = status === 500 ? 'The request failed. Please try again.' : err instanceof ZodError
+    ? err.issues[0]?.path[0] === 'creator_email' ? 'Enter a valid email address' : err.issues[0]?.message || 'Invalid request'
+    : err.message
+  return c.json({ detail }, status as any)
 })
 app.get('/health', async (c) => { await q`SELECT 1`; return c.json({ ok: true }) })
 app.get('/requirements', (c) => c.json(requirementSpec(c.req.query('profile_type') || '', c.req.query('category') || '')))
@@ -216,6 +219,18 @@ app.post('/campaigns/:id/documents', async (c) => {
   }
   return c.json({ id: documentId, campaign_version: result.version }, 201)
 })
+app.delete('/campaigns/:id/documents/:documentId', async (c) => {
+  const id = c.req.param('id'); const documentId = c.req.param('documentId')
+  return c.json(await sql.begin(async (tx) => {
+    const rows = await tx`SELECT status FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`
+    if (!rows.length) fail(404, 'Campaign not found')
+    if (!['draft', 'action_required'].includes(rows[0].status)) fail(409, 'Documents can only be removed before human review')
+    const deleted = await tx`DELETE FROM reviewready.campaign_documents WHERE id=${documentId} AND campaign_id=${id} RETURNING id`
+    if (!deleted.length) fail(404, 'Document not found')
+    const updated = await tx`UPDATE reviewready.campaigns SET version=version+1,updated_at=now() WHERE id=${id} RETURNING version`
+    return { id: documentId, campaign_version: updated[0].version }
+  }))
+})
 app.post('/campaigns/:id/check-readiness', async (c) => {
   await rateLimit(c, 'readiness-check', 10)
   const id = c.req.param('id'); const campaign = await campaignOr404(id)
@@ -241,11 +256,11 @@ async function submit(id: string, forceReview: boolean, urgency: z.infer<typeof 
     const expedited = urgency.expedited_requested ?? campaign.expedited_requested
     const reason = expedited ? (urgency.urgency_reason ?? campaign.urgency_reason) : ''
     const deadline = expedited ? (urgency.urgency_deadline ?? campaign.urgency_deadline) : null
-    await tx`UPDATE reviewready.campaigns SET status='initial_review',submitted_with_warning=${forceReview},creator_override_at=${forceReview ? new Date() : null},readiness_state=NULL,review_score=NULL,review_level=NULL,review_breakdown=NULL,review_recommendation=NULL,review_routing_reason=NULL,expedited_requested=${expedited},urgency_reason=${reason},urgency_deadline=${deadline},priority_status=${expedited ? 'requested' : 'standard'},creator_submission_count=creator_submission_count+${forceReview ? 0 : 1},last_submitted_at=now(),updated_at=now() WHERE id=${id}`
+    await tx`UPDATE reviewready.campaigns SET status='initial_review',submitted_with_warning=${forceReview},creator_override_at=${forceReview ? new Date() : null},readiness_state=NULL,review_score=NULL,review_level=NULL,review_breakdown=NULL,review_recommendation=NULL,review_routing_reason=NULL,expedited_requested=${expedited},urgency_reason=${reason},urgency_deadline=${deadline},priority_status=${expedited ? 'requested' : 'standard'},creator_submission_count=creator_submission_count+1,last_submitted_at=now(),updated_at=now() WHERE id=${id}`
     const payload = { type: 'CAMPAIGN_SUBMITTED', event_id: eventId, campaign_id: id, campaign_version: campaign.version, force_review: forceReview }
     await tx`INSERT INTO reviewready.submission_events (event_id,campaign_id,campaign_version,payload) VALUES (${eventId},${id},${campaign.version},${json(payload)})`
     await tx`INSERT INTO reviewready.review_packets (campaign_id,campaign_version,status,packet) VALUES (${id},${campaign.version},'pending',NULL) ON CONFLICT (campaign_id) DO UPDATE SET campaign_version=EXCLUDED.campaign_version,status='pending',packet=NULL,updated_at=now()`
-    if (forceReview) await recordAutomation(tx, id, 'creator_override', 'complete', 'Creator read the clarification notes and continued without changes.')
+    if (forceReview) await recordAutomation(tx, id, 'creator_override', 'complete', 'Creator requested review with the current details.')
     else {
       await recordAutomation(tx, id, 'submission_received', 'complete', 'Campaign received. Submission checks have started.')
       await recordAutomation(tx, id, 'initial_ai_review', 'running', 'Checking campaign clarity and consistency.')
@@ -263,7 +278,7 @@ app.get('/campaigns/:id/readiness', async (c) => {
   if (campaign.status === 'draft' && analysis.input_hash !== readinessHash(campaign)) fail(409, 'Readiness analysis is stale; run check-readiness')
   const semantic = analysis.semantic_result; const requirements = checkRequirements(campaign, docs)
   const assessment = scoreReadiness(requirements, semantic); const feedback = creatorFeedbackPolicy(campaign, requirements, semantic, assessment)
-  return c.json({ readiness_state: campaign.readiness_state || analysis.overall_state, requirements, semantic_status: semantic.status, recommendation: campaign.review_recommendation || assessment.recommendation, assessment, feedback_mode: feedback.mode, feedback_reason: feedback.reason, improvement_suggestions: feedback.suggestions, document_feedback: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'Some supporting material does not appear to align with the stated purpose. Please review the material you added.' : null, clarification_rounds: campaign.clarification_rounds, creator_submission_count: campaign.creator_submission_count, maximum_creator_returns: 1 })
+  return c.json({ readiness_state: campaign.readiness_state || analysis.overall_state, requirements, semantic_status: semantic.status, recommendation: campaign.review_recommendation || assessment.recommendation, assessment, feedback_mode: feedback.mode, feedback_reason: feedback.reason, improvement_suggestions: feedback.suggestions, document_feedback: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'Some supporting material does not appear to align with the stated purpose. Please review the material you added.' : null, clarification_rounds: campaign.clarification_rounds, creator_submission_count: campaign.creator_submission_count, maximum_creator_returns: 2 })
 })
 
 app.post('/internal/campaigns/:id/claim-processing', async (c) => {
@@ -301,7 +316,9 @@ app.post('/internal/campaigns/:id/final-analysis', async (c) => {
     const rows = await tx`SELECT * FROM reviewready.campaigns WHERE id=${id} FOR UPDATE`; const campaign = rows[0]
     const eventRows = await tx`SELECT payload FROM reviewready.submission_events WHERE event_id=${payload.event_id}`; const forceReview = Boolean(eventRows[0]?.payload?.force_review)
     if (campaign.status === 'action_required') return { ...readiness, continue_to_packet: false, campaign_status: 'action_required', ops_review_status: 'not_run', assessment: readiness.assessment, clarification_round: campaign.clarification_rounds }
-    const rounds = campaign.clarification_rounds; const route = decideSubmissionRoute(readiness.assessment, rounds, forceReview, campaign.expedited_requested, campaign.creator_submission_count, readiness.requirements)
+    const docs = await documentsFor(id, tx)
+    const hasIrrelevantDocument = docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low')
+    const rounds = campaign.clarification_rounds; const route = decideSubmissionRoute(readiness.assessment, rounds, forceReview, campaign.expedited_requested, campaign.creator_submission_count, readiness.requirements, hasIrrelevantDocument)
     await tx`UPDATE reviewready.campaigns SET readiness_state=${readiness.readiness_state},review_score=${readiness.assessment.score},review_level=${readiness.assessment.level},review_breakdown=${tx.json(readiness.assessment.breakdown)},review_recommendation=${readiness.assessment.recommendation},submitted_with_warning=${route.forward_with_notes},review_routing_reason=${route.routing_reason},updated_at=now() WHERE id=${id}`
     if (!forceReview) await completeAutomation(tx, id, 'initial_ai_review', 'Submission check completed.')
     if (route.return_to_creator) {
@@ -440,7 +457,7 @@ app.get('/ops/reviews/:id', async (c) => {
     ) n),'[]'::jsonb) AS notifications,
     (SELECT semantic_result FROM reviewready.readiness_analyses WHERE campaign_id=c.id AND prompt_version=${PROMPT_VERSION} ORDER BY created_at DESC LIMIT 1) AS semantic,
     COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.created_at DESC) FROM (
-      SELECT input_hash,result,created_at FROM reviewready.ops_review_analyses WHERE campaign_id=c.id AND prompt_version=${OPS_PROMPT_VERSION} ORDER BY created_at DESC LIMIT 20
+      SELECT input_hash,prompt_version,result,created_at FROM reviewready.ops_review_analyses WHERE campaign_id=c.id ORDER BY created_at DESC LIMIT 40
     ) o),'[]'::jsonb) AS ops_rows
   FROM reviewready.campaigns c WHERE c.id=${id}`
   if (!rows.length) fail(404, 'Campaign not found')
@@ -450,10 +467,11 @@ app.get('/ops/reviews/:id', async (c) => {
   if (packet) {
     const semantic = rawSemantic || { status: 'unavailable', issues: [] }
     const hash = opsHash(campaign, docs, semantic)
-    const ops = opsRows.find((row: any) => row.input_hash === hash)
+    const ops = opsRows.find((row: any) => row.input_hash === hash && row.prompt_version === OPS_PROMPT_VERSION)
+      || opsRows.find((row: any) => row.input_hash === hash)
     const requirements = checkRequirements(campaign, docs)
     const assess = scoreReadiness(requirements, semantic)
-    packet = { ...packet, ops_review: ops?.result || { status: 'not_run' }, requirements, internal_assessment: { score: campaign.review_score ?? assess.score, level: campaign.review_level || assess.level, recommendation: campaign.review_recommendation || assess.recommendation, breakdown: campaign.review_breakdown || assess.breakdown, creator_submission_count: campaign.creator_submission_count, clarification_rounds: campaign.clarification_rounds, routing_reason: campaign.review_routing_reason }, expedited_review: { requested: campaign.expedited_requested, reason: campaign.urgency_reason, deadline: campaign.urgency_deadline, priority_status: campaign.priority_status }, documents: docs.map((doc: any) => ({ id: doc.id, document_type: doc.document_type, filename: doc.filename, analysis: doc.analysis })), ops_attention: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'POTENTIAL_MATERIAL_MISMATCH' : null }
+    packet = { ...packet, ops_review: ops?.result || { status: 'not_run' }, ops_review_needs_update: Boolean(ops && ops.prompt_version !== OPS_PROMPT_VERSION), requirements, internal_assessment: { score: campaign.review_score ?? assess.score, level: campaign.review_level || assess.level, recommendation: campaign.review_recommendation || assess.recommendation, breakdown: campaign.review_breakdown || assess.breakdown, creator_submission_count: campaign.creator_submission_count, clarification_rounds: campaign.clarification_rounds, routing_reason: campaign.review_routing_reason }, expedited_review: { requested: campaign.expedited_requested, reason: campaign.urgency_reason, deadline: campaign.urgency_deadline, priority_status: campaign.priority_status }, documents: docs.map((doc: any) => ({ id: doc.id, document_type: doc.document_type, filename: doc.filename, analysis: doc.analysis })), ops_attention: docs.some((doc: any) => doc.analysis?.relevance_to_campaign === 'low') ? 'POTENTIAL_MATERIAL_MISMATCH' : null }
     packet.post_submission_reviewability = packet.ops_attention ? 'HIGH_FRICTION' : packet.readiness_state
   }
   return c.json({ ...packetRow, packet, campaign, documents: docs, actions, priority_events: priorityEvents, notifications })
