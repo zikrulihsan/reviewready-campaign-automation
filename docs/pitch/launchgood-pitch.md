@@ -51,7 +51,7 @@ Intro (SCQ): **Situation** — LaunchGood's public vetting guidance lists docume
 
 ## Video script (≈4:45 at 140 words per minute)
 
-668 words across 11 slides. Timestamps assume a steady 140 words per minute; slides A1–A4 are an appendix for readers and are not narrated.
+About 670 words across 11 slides. Timestamps assume a steady 140 words per minute.
 
 1. **Cover (0:00)** — Hi, I'm [your name]. Instead of a resume, I built ReviewReady: a working prototype of campaign review for a platform like LaunchGood. My answer to the challenge: let AI do the preparation work of review, so people spend their time on judgment.
 2. **The answer (0:18)** — Here is the whole pitch on one slide. Put AI in front of the review queue as a preparer, never as the judge. Three reasons. One: automate the flow, not the decision. Two: rules decide, AI advises. Three: the line between AI and human is explicit, and every failure falls back to a person. The rest of this video is the evidence.
@@ -63,9 +63,9 @@ Intro (SCQ): **Situation** — LaunchGood's public vetting guidance lists docume
 8. **The human line (3:27)** — Pillar three is the human line. AI reduces the reviewer's uncertainty; it never resolves it. AI checks, rates, summarises and drafts questions. A person opens the real files, approves, verifies identity and funds path, and publishes. AI never approves or rejects, never judges fraud, and never sees ID or bank documents. That is enforced in code.
 9. **Failure modes (3:51)** — Every failure falls back to a person. Model down: no score, still reviewed. Workflow stalls: shown as paused after five minutes, with one retry. Duplicate webhooks are ignored. Submitted text is treated as untrusted data, and model output is validated against a schema.
 10. **What I tested (4:09)** — I also tested against the rules, not just the happy path. On the live site, the deployed build showed 100 out of 100 while AI was unavailable, exactly the failure my rules forbid. The code is fixed; the deploy needs to catch up.
-11. **Close (4:27)** — So: AI prepares, rules route, people decide. That is how I think AI makes a small team more capable: not another chatbot, but less waiting around human judgment. The demo is live, and the appendix covers more rules and my rollout plan. Thank you.
+11. **Close (4:27)** — So: AI prepares, rules route, people decide. Not another chatbot: less time chasing missing information, and more time for the decisions only people should make. The demo is live, and the written pitch in the repository covers the remaining rules and my rollout plan. Thank you.
 
-Appendix (not narrated): A1 How I found it · A2 Policy as data · A3 Two smaller rules · A4 What I would do next.
+Not in the video deck, covered in this document instead: how I found the problem, policy as data, expedited review and feedback rules, and the rollout plan.
 
 ## Honest limits
 
