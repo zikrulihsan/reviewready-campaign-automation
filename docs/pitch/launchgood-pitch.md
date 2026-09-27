@@ -49,25 +49,23 @@ Intro (SCQ): **Situation** — LaunchGood's public vetting guidance lists docume
 | Urgency | Request confirmed by reviewer | Automatic queue jump | Urgency is easy to claim; priority is a human call | expedited review flow |
 | Feedback | ≤2 suggestions, warm tone | Full list of findings | Long critiques make creators in crisis give up | `creatorFeedbackPolicy()` |
 
-## Video script (≈5 minutes)
+## Video script (≈4:45 at 140 words per minute)
 
-Slides marked *(optional)* can be skipped to stay within the time limit.
+668 words across 11 slides. Timestamps assume a steady 140 words per minute; slides A1–A4 are an appendix for readers and are not narrated.
 
-1. **Cover (0:00)** — Instead of a resume, I built ReviewReady, a working prototype of a crowdfunding campaign review pipeline. My answer to the challenge: AI should do the preparation work of review so reviewers spend their time on judgment.
-2. **The answer (0:20)** — Put AI in front of the queue as a preparer, never as the judge. Three reasons: automate the flow, not the decision; rules decide, AI advises; the human line is explicit.
-3. **Why this problem (0:50)** — From public vetting guidance: every campaign is checked by people. My hypothesis: much of that time is spent chasing missing or unclear information, and it spikes in Ramadan. How does a small team review more without lowering trust?
-4. **How I found it (1:15)** — Read the public rules and turned them into checks, walked the creator journey myself, and marked every place where one person waits on another.
-5. **The flow (1:35)** — Submit writes campaign + event in one transaction; a DB webhook starts n8n; the event is claimed once; documents checked for relevance; score and route; reviewer brief; Slack and email. Everything that affects trust — review, change requests, verification, publishing — is human.
-6. **Why this flow (2:10)** — Protect the submission first: async AI, outbox event, rules in code not n8n, idempotent claims, notification outbox with retries.
-7. **The score (2:40)** — 30 completeness by code, 50 clarity and 20 consistency by AI using high/medium/low ratings. If AI is unavailable there's no score, never a fake 100.
-8. **Bounded routing (3:10)** — At most two returns; the third submission always reaches a person. "Submit as it is" for mild gaps. Urgent campaigns skip the loop.
-9. *(optional)* **Policy as data** — document requirements are a lookup table; AI only judges relevance.
-10. *(optional)* **Two smaller rules** — expedited is a request; feedback is ≤2 kind suggestions.
-11. **The human line (3:40)** — AI reduces the reviewer's uncertainty; it never resolves it. AI never approves, rejects, predicts fraud, sees ID or bank documents, or reorders the queue.
-12. **Failure modes (4:05)** — Gemini down, n8n stalls, duplicate webhooks, prompt injection, wrong files, notification outages: each falls back to a person.
-13. **What I tested (4:25)** — Testing the live site found "100/100 Strong" shown while AI was unavailable, the exact failure my rules forbid; fixed in code, redeploy pending.
-14. *(optional)* **Next** — shadow mode, calibrate thresholds against reviewer decisions, then turn on routing per category. Measure time to first review, messages per campaign, and how many AI-returned campaigns are later approved.
-15. **Close (4:45)** — AI prepares, rules route, people decide.
+1. **Cover (0:00)** — Hi, I'm [your name]. Instead of a resume, I built ReviewReady: a working prototype of campaign review for a platform like LaunchGood. My answer to the challenge: let AI do the preparation work of review, so people spend their time on judgment.
+2. **The answer (0:18)** — Here is the whole pitch on one slide. Put AI in front of the review queue as a preparer, never as the judge. Three reasons. One: automate the flow, not the decision. Two: rules decide, AI advises. Three: the line between AI and human is explicit, and every failure falls back to a person. The rest of this video is the evidence.
+3. **Why this problem (0:45)** — I don't know LaunchGood's internal systems, so I started from public material. The vetting guidance says people check documents, beneficiary, funds path, sanctions and guidelines. I turned those rules into checks, then walked the creator journey myself. My hypothesis: much reviewer time goes to chasing missing or unclear information before any judgment starts, and that grows with volume, especially in Ramadan. So how does a small team review more without lowering trust?
+4. **The flow (1:15)** — Here is the flow. The top row is automated. The creator submits and gets an immediate response. A database webhook starts n8n, which claims the event once, checks documents for relevance, scores the campaign and decides the route. If it goes forward, the reviewer gets a brief with a summary and neutral questions, plus a Slack alert, and the creator gets an email. The bottom row is all human: review, request changes or approve, verify, publish. Only step four can send a campaign back.
+5. **Why this flow (1:51)** — Each flow decision was A versus B, and my rule was: protect the submission first. AI runs after submit, not inside the request, so a slow model never loses a campaign. The event is saved in the same transaction as the campaign, so nothing is saved but never processed. Rules live in tested code; n8n only sequences the calls. Events are claimed by ID and version, because webhooks retry. And notifications go through an outbox, so an email outage never undoes a decision.
+6. **The readiness score (2:27)** — Pillar two: rules decide, AI advises. Completeness, 30 points, is plain code; no model needed. Clarity, 50 points, is where AI actually helps, so it weighs most: unclear stories cause more back-and-forth than empty fields. Consistency is 20. I ask the model for high, medium or low, not a number, because that is more stable. And if AI is unavailable, there is no score, and the campaign still reaches a reviewer. A fake 100 is worse than no score.
+7. **Bounded routing (3:01)** — Routing is bounded on purpose. The first submission can go back to the creator with at most two tips. The second goes back only for severe problems. The third always reaches a person, and urgent campaigns skip the loop. Why cap it? An AI that can bounce someone forever becomes a gatekeeper, and a person in crisis simply gives up.
+8. **The human line (3:27)** — Pillar three is the human line. AI reduces the reviewer's uncertainty; it never resolves it. AI checks, rates, summarises and drafts questions. A person opens the real files, approves, verifies identity and funds path, and publishes. AI never approves or rejects, never judges fraud, and never sees ID or bank documents. That is enforced in code.
+9. **Failure modes (3:51)** — Every failure falls back to a person. Model down: no score, still reviewed. Workflow stalls: shown as paused after five minutes, with one retry. Duplicate webhooks are ignored. Submitted text is treated as untrusted data, and model output is validated against a schema.
+10. **What I tested (4:09)** — I also tested against the rules, not just the happy path. On the live site, the deployed build showed 100 out of 100 while AI was unavailable, exactly the failure my rules forbid. The code is fixed; the deploy needs to catch up.
+11. **Close (4:27)** — So: AI prepares, rules route, people decide. That is how I think AI makes a small team more capable: not another chatbot, but less waiting around human judgment. The demo is live, and the appendix covers more rules and my rollout plan. Thank you.
+
+Appendix (not narrated): A1 How I found it · A2 Policy as data · A3 Two smaller rules · A4 What I would do next.
 
 ## Honest limits
 
