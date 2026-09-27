@@ -1,0 +1,127 @@
+{
+  "clear": {
+    "id": "ba5c8b68-a08b-453f-a92a-5fa9df757e43",
+    "title": "TEST ONLY — DEMO 01 — Maya's school supplies",
+    "label": "Clear request",
+    "expected": "No urgent creator tips; suitable for the human review queue. AI wording may vary.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/ba5c8b68-a08b-453f-a92a-5fa9df757e43",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "ready",
+      "feedback_mode": "none",
+      "suggestions": [],
+      "document_count": 0,
+      "score": 100
+    }
+  },
+  "goal_gap": {
+    "id": "21dd8a9c-d21d-462b-9a5b-8a287a26d508",
+    "title": "TEST ONLY — DEMO 02 — Noor's rent support",
+    "label": "Specific funding gap",
+    "expected": "A focused question about the unexplained $200 difference, without calling the creator dishonest.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/21dd8a9c-d21d-462b-9a5b-8a287a26d508",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "targeted_clarification",
+      "feedback_mode": "targeted",
+      "suggestions": [
+        "You've set a goal of $2,600, but the fund usage breakdown only accounts for $2,400 ($1,200 for overdue rent and $1,200 for the following month). Please clarify how the remaining $200 will be used or adjust your goal amount to match the stated needs."
+      ],
+      "document_count": 0,
+      "score": 84
+    }
+  },
+  "foundational": {
+    "id": "27e9de40-dc17-4fb2-a97c-498151f80729",
+    "title": "TEST ONLY — DEMO 03 — Family support request",
+    "label": "Foundational guidance",
+    "expected": "Several concrete basics to add: what happened, what the funds cover, and how funds reach the beneficiary. No fixed two-tip limit.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/27e9de40-dc17-4fb2-a97c-498151f80729",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "strong_correction",
+      "feedback_mode": "targeted",
+      "suggestions": [
+        "Could you please explain in more detail why you and your family need help? Sharing specific circumstances will help supporters understand your situation.",
+        "Please describe what kind of expenses the funds will be used for. For example, will they cover housing, food, medical bills, or other specific needs?",
+        "To help reviewers understand who will benefit, could you please specify who 'My family' includes (e.g., children, parents, siblings)?",
+        "Could you please clarify how the funds will be delivered to the beneficiaries? For example, will you use a bank transfer, direct payment to a vendor, or another method?",
+        "To ensure clarity, please make sure the beneficiary information consistently reflects who will receive the funds. If the funds are for your family, please clarify your relationship as the fundraiser to them, and if 'Self' means you are also a beneficiary among the family."
+      ],
+      "document_count": 0,
+      "score": 53
+    }
+  },
+  "contradiction": {
+    "id": "2c08ce0c-1f00-4479-bc26-eda9e868b7cc",
+    "title": "TEST ONLY — DEMO 04 — School supplies for Lina",
+    "label": "Contradictory purpose",
+    "expected": "A high-priority consistency clarification naming the conflict between school supplies and rent, without an accusation.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/2c08ce0c-1f00-4479-bc26-eda9e868b7cc",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "strong_correction",
+      "feedback_mode": "targeted",
+      "suggestions": [
+        "Your campaign title 'School supplies for Lina' and category 'education' suggest the funds are for school supplies, but your story and fund usage clearly state they are for one month of Lina's rent. To help reviewers understand your campaign's purpose, please make sure your title and category align with the actual use of funds described in your story. For instance, you could change the title to 'Rent for Lina' and the category to 'housing' if the funds are intended for rent."
+      ],
+      "document_count": 0,
+      "score": 55
+    }
+  },
+  "delivery_gap": {
+    "id": "94f4210c-80a1-4e9a-a649-b8b81fceb01b",
+    "title": "TEST ONLY — DEMO 05 — Omar's therapy sessions",
+    "label": "Unclear funds path",
+    "expected": "A focused request for who receives the money and how therapy will be paid for; no fraud inference.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/94f4210c-80a1-4e9a-a649-b8b81fceb01b",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "targeted_clarification",
+      "feedback_mode": "targeted",
+      "suggestions": [
+        "To help donors understand how the funds will reach Omar, please describe how you plan to transfer the collected funds to him or directly to the provider, and when this will happen in relation to the sessions starting next month."
+      ],
+      "document_count": 0,
+      "score": 94
+    }
+  },
+  "multiple_gaps": {
+    "id": "5bf47ed7-cfd1-40c9-9b9b-699ab2d34070",
+    "title": "TEST ONLY — DEMO 06 — Community emergency supplies",
+    "label": "Several urgent details",
+    "expected": "More than two distinct tips if needed: missing beneficiary relationship, unclear costs, and unclear delivery. Highest urgency first.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/5bf47ed7-cfd1-40c9-9b9b-699ab2d34070",
+    "observed": {
+      "status": "draft",
+      "semantic_status": "complete",
+      "recommendation": "strong_correction",
+      "feedback_mode": "targeted",
+      "suggestions": [
+        "Add the relationship to the beneficiary so the reviewer can understand the request.",
+        "Please provide more details on how the remaining funds will be used. Breaking down the $3400 goal into specific categories beyond 'bedding and food' would be very helpful for reviewers to understand the full scope of needs.",
+        "To ensure funds reach the beneficiary smoothly, please describe who this 'someone else' is and what role they will play in delivering the funds. Also, clarify what 'when it is ready' means in terms of the timeline for fund delivery."
+      ],
+      "document_count": 0,
+      "score": 49
+    }
+  },
+  "document_mismatch": {
+    "id": "e4b8875b-5019-412b-ada1-05c0445a19b2",
+    "title": "TEST ONLY — DEMO 07 — Tutoring support for Nia",
+    "label": "Supporting document mismatch",
+    "expected": "The attached sample PDF is about a bicycle repair quote, although the campaign is about tutoring. AI should flag relevance for human review, not authenticity.",
+    "url": "https://reviewready-campaign.netlify.app/creator/campaign/e4b8875b-5019-412b-ada1-05c0445a19b2",
+    "verified": {
+      "status": "draft",
+      "document_count": 1,
+      "version": 3,
+      "readiness": "Needs a fresh check after the story edit"
+    }
+  }
+}
