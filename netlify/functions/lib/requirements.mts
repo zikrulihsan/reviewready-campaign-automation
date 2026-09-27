@@ -34,14 +34,13 @@ export function checkRequirements(campaign: any, documents: any[]) {
   const missing_one_of_documents = oneOf && !oneOf.some((name) => present.has(name)) ? [oneOf] : []
   const coreText = ['story', 'fund_usage', 'fund_delivery'].map((key) => String(campaign[key] || '').trim())
   const thinFields = coreText.filter((value) => value.split(/\s+/).filter(Boolean).length < 6).length
-  const wordCount = coreText.join(' ').split(/\s+/).filter(Boolean).length
   const placeholders = new Set(['test', 'testing', 'asdf', 'n/a', 'na', 'none', 'help', 'need help', 'for needs', 'something', 'anything'])
   const placeholderCount = coreText.filter((value) => placeholders.has(value.toLowerCase().replace(/[.,!?]/g, '').trim())).length
   return {
     required_fields: [...REQUIRED_FIELDS, 'goal_amount', ...(CATEGORY_FIELDS[campaign.category] || [])],
     required_documents: [...required].sort(), one_of_documents: oneOf || [],
     missing_fields, invalid_fields, missing_documents, missing_one_of_documents,
-    low_information: wordCount < 24 || thinFields >= 2 || placeholderCount > 0,
+    low_information: thinFields >= 2 || placeholderCount > 0,
     placeholder_count: placeholderCount,
     submission_complete: !missing_fields.length && !invalid_fields.length,
     documents_complete: !missing_documents.length && !missing_one_of_documents.length,
@@ -101,27 +100,64 @@ export function decideSubmissionRoute(assessment: any, rounds: number, forceRevi
 }
 
 export function creatorFeedbackPolicy(campaign: any, requirements: any, semantic: any, assessment: any) {
-  const fields = { story: String(campaign.story || '').trim(), fund_usage: String(campaign.fund_usage || '').trim(), fund_delivery: String(campaign.fund_delivery || '').trim() }
-  const thin = Object.entries(fields).filter(([, value]) => value.split(/\s+/).filter(Boolean).length < 6).map(([key]) => key)
-  const combined = Object.values(fields).join(' ').split(/\s+/).filter(Boolean).length
-  const placeholders = new Set(['test', 'testing', 'asdf', 'n/a', 'na', 'none', 'help', 'need help', 'for needs', 'something', 'anything'])
-  const placeholderCount = Object.values(fields).filter((value) => placeholders.has(value.toLowerCase().replace(/[.,!?]/g, '').trim())).length
-  const lowInfo = combined < 24 || thin.length >= 2 || placeholderCount > 0
-  const issues = semantic?.status === 'complete' ? semantic.issues || [] : []
+  type Tip = { category: string; urgency: 'high' | 'medium'; text: string; evidence?: string }
+  const tips: Tip[] = []
+  const seen = new Set<string>()
+  const add = (tip: Tip) => {
+    const normalized = tip.text.toLowerCase().replace(/\s+/g, ' ').trim()
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    tips.push(tip)
+  }
   const fieldLabels: Record<string, string> = { title: 'campaign title', story: 'campaign story', goal_amount: 'funding goal', beneficiary: 'beneficiary', beneficiary_relationship: 'relationship to the beneficiary', fund_usage: 'use of funds', fund_delivery: 'how funds will be delivered', travel_purpose: 'purpose of travel', destination: 'destination' }
-  const missingSuggestions = (requirements.missing_fields || []).map((field: string) => `Add the ${fieldLabels[field] || field.replaceAll('_', ' ')} so a reviewer can understand the request.`)
-  const invalidSuggestions = (requirements.invalid_fields || []).map((field: string) => field === 'title_max_100' ? 'Shorten the campaign title to 100 characters or fewer.' : `Review the ${field.replaceAll('_', ' ')} value.`)
-  const dimensionSuggestions: string[] = []
-  if (['low', 'medium'].includes(semantic?.purpose_clarity) || ['low', 'medium'].includes(semantic?.beneficiary_clarity)) dimensionSuggestions.push('Explain what happened, who needs support, and why help is needed now.')
-  if (['low', 'medium'].includes(semantic?.fund_usage_clarity) || ['low', 'medium'].includes(semantic?.fund_delivery_clarity)) dimensionSuggestions.push('Explain what the funds will pay for and how support will reach the beneficiary.')
-  if (['low', 'medium'].includes(semantic?.internal_consistency)) dimensionSuggestions.push('Check that the title, category, story, and beneficiary describe the same need.')
-  if (!issues.length && !missingSuggestions.length && !invalidSuggestions.length && !dimensionSuggestions.length && !lowInfo) return { mode: 'none', reason: 'no_creator_feedback_needed', suggestions: [] }
-  const useGeneral = lowInfo || assessment.recommendation === 'strong_correction' || assessment.finding_count >= 3
-  if (!useGeneral) return { mode: 'targeted', reason: 'limited_specific_gaps', suggestions: [...new Set([...missingSuggestions, ...invalidSuggestions, ...dimensionSuggestions, ...issues.map((item: any) => String(item.feedback || '').trim()).filter(Boolean)])].slice(0, 2) }
-  const suggestions: string[] = []
-  if (thin.includes('story') || ['low', 'medium'].includes(semantic.purpose_clarity) || ['low', 'medium'].includes(semantic.beneficiary_clarity)) suggestions.push('Describe what happened, who needs support, and why help is needed now.')
-  if (thin.includes('fund_usage') || thin.includes('fund_delivery') || ['low', 'medium'].includes(semantic.fund_usage_clarity) || ['low', 'medium'].includes(semantic.fund_delivery_clarity)) suggestions.push('Add a simple breakdown of what the funds will pay for and how the support will reach the beneficiary.')
-  if (['low', 'medium'].includes(semantic.internal_consistency)) suggestions.push('Check that the title, category, story, and beneficiary describe the same need.')
-  if (!suggestions.length) suggestions.push('Add the main facts a reviewer needs: who needs help, what happened, and what the funds will cover.')
-  return { mode: 'general', reason: 'submission_needs_foundational_detail', suggestions: [...new Set([...missingSuggestions, ...invalidSuggestions, ...suggestions, ...dimensionSuggestions])].slice(0, 2) }
+  const missing = new Set<string>(requirements.missing_fields || [])
+  for (const field of missing) add({ category: field, urgency: 'high', text: `Add the ${fieldLabels[field] || field.replaceAll('_', ' ')} so the reviewer can understand the request.` })
+  for (const field of requirements.invalid_fields || []) add({ category: field, urgency: 'high', text: field === 'title_max_100' ? 'Shorten the campaign title to 100 characters or fewer.' : `Correct the ${field.replaceAll('_', ' ')} value.` })
+
+  const issues = semantic?.status === 'complete' ? semantic.issues || [] : []
+  const covered = new Set<string>()
+  const missingForType: Record<string, string[]> = { purpose: ['story'], beneficiary: ['beneficiary', 'beneficiary_relationship'], fund_usage: ['fund_usage'], fund_delivery: ['fund_delivery'], goal: ['goal_amount'], consistency: [] }
+  for (const issue of issues) {
+    if (!['critical', 'medium'].includes(issue.severity)) continue
+    const category = String(issue.type || 'other')
+    if ((missingForType[category] || []).some(field => missing.has(field))) continue
+    const feedback = String(issue.feedback || '').trim()
+    if (!feedback) continue
+    covered.add(category)
+    add({ category, urgency: issue.severity === 'critical' ? 'high' : 'medium', text: feedback, evidence: String(issue.evidence || '').trim() })
+  }
+
+  if (requirements.low_information) {
+    const thinFields: Array<[string, string]> = [
+      ['story', 'Add what happened, who needs support, and why help is needed now to the campaign story.'],
+      ['fund_usage', 'Add the main costs the funds would cover, even if amounts are estimates.'],
+      ['fund_delivery', 'Explain who will receive the funds and how they will be passed on.'],
+    ]
+    for (const [field, text] of thinFields) {
+      const words = String(campaign[field] || '').trim().split(/\s+/).filter(Boolean)
+      if (words.length >= 6 || missing.has(field) || covered.has(field === 'story' ? 'purpose' : field)) continue
+      add({ category: field === 'story' ? 'purpose' : field, urgency: 'medium', text })
+    }
+  }
+
+  // A model can return low clarity without a usable issue. Supply one focused fallback
+  // for that dimension, while avoiding extra generic advice beside a specific finding.
+  const dimensions: Array<[string, string, string]> = [
+    ['purpose', 'purpose_clarity', 'Describe what happened and why support is needed now.'],
+    ['beneficiary', 'beneficiary_clarity', 'Explain who will benefit and your relationship to them.'],
+    ['fund_usage', 'fund_usage_clarity', 'Explain what the requested funds will pay for.'],
+    ['fund_delivery', 'fund_delivery_clarity', 'Explain how the funds will reach the beneficiary.'],
+    ['consistency', 'internal_consistency', 'Clarify any difference between the title, category, story, and beneficiary.'],
+  ]
+  for (const [category, dimension, text] of dimensions) {
+    if (semantic?.status !== 'complete' || semantic[dimension] !== 'low' || covered.has(category) || (missingForType[category] || []).some(field => missing.has(field))) continue
+    add({ category, urgency: 'medium', text })
+  }
+  if (!tips.length && ['targeted_clarification', 'strong_correction'].includes(assessment?.recommendation)) {
+    for (const [category, dimension, text] of dimensions) {
+      if (semantic?.[dimension] === 'medium') add({ category, urgency: 'medium', text })
+    }
+  }
+  tips.sort((a, b) => (a.urgency === 'high' ? 0 : 1) - (b.urgency === 'high' ? 0 : 1))
+  return { mode: tips.length ? 'targeted' : 'none', reason: tips.length ? 'material_gaps' : 'no_urgent_feedback_needed', suggestions: tips.map(tip => tip.text), items: tips }
 }

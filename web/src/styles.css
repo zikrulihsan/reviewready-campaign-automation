@@ -62,6 +62,7 @@
 .reviewer-shell .ops-findings{gap:14px}
 .reviewer-shell .ops-finding{padding:19px;border-color:#d9e6dc;background:#fcfefc}
 .reviewer-shell .ops-finding-head strong{font-size:16px}
+.reviewer-shell .ops-category{display:block;margin:0 0 10px;color:#668177;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
 .reviewer-shell .ops-priority{font-size:11px;padding:6px 10px}
 .reviewer-shell .ops-finding p{font-size:14px;line-height:1.6;margin-bottom:12px}
 .reviewer-shell .ops-evidence,.reviewer-shell .ops-question{display:grid;gap:4px;font-size:13px;line-height:1.6;padding:10px 12px;border-radius:7px;margin-top:9px}

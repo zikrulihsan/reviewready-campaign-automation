@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "npm --prefix web run build",
-    "dev": "netlify dev"
+    "dev": "netlify dev",
+    "test:review": "node --test tests/review-quality.test.mjs"
   },
   "dependencies": {
     "hono": "^4.7.2",
