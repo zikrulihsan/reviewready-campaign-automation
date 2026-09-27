@@ -11,7 +11,7 @@ async function loadPureModule(name) {
 }
 
 const { checkRequirements, creatorFeedbackPolicy, scoreReadiness, decideSubmissionRoute } = await loadPureModule('requirements.mts')
-const { prepareReviewerBrief } = await loadPureModule('review-quality.mts')
+const { prepareReadinessAssessment, prepareReviewerBrief } = await loadPureModule('review-quality.mts')
 
 const campaign = { story: 'A family needs help with several essential expenses after a house fire.', fund_usage: 'The funds will cover temporary accommodation and replacement school supplies.', fund_delivery: 'The organizer will pay the landlord and school suppliers directly.' }
 const requirements = { required_fields: ['title', 'story', 'beneficiary', 'fund_usage', 'fund_delivery', 'goal_amount'], missing_fields: [], invalid_fields: [], low_information: false, placeholder_count: 0 }
@@ -34,6 +34,17 @@ test('more than two urgent, distinct issues all reach the creator, strongest fir
   assert.equal(result.items.length, 3)
   assert.equal(result.items[0].category, 'consistency')
   assert.ok(result.suggestions.every(text => !text.includes('Polish')))
+})
+
+test('a specific contradiction does not gain generic tips for details already present', () => {
+  const result = creatorFeedbackPolicy(campaign, requirements, { ...semantic([tip('consistency', 'critical', 'The title says school supplies but the story requests rent; align them.')]), purpose_clarity: 'low', fund_usage_clarity: 'low' }, { recommendation: 'strong_correction' })
+  assert.deepEqual(result.suggestions, ['The title says school supplies but the story requests rent; align them.'])
+})
+
+test('demo labels are excluded from AI issues only for TEST ONLY campaigns', () => {
+  const assessment = semantic([tip('other', 'medium', 'This is a TEST ONLY demo; please describe a real campaign.'), tip('fund_usage', 'medium', 'Break down the remaining costs.')])
+  assert.equal(prepareReadinessAssessment({ title: 'TEST ONLY — DEMO' }, assessment).issues.length, 1)
+  assert.equal(prepareReadinessAssessment({ title: 'A real fundraiser' }, assessment).issues.length, 2)
 })
 
 test('missing required detail is not repeated by an AI issue about the same detail', () => {

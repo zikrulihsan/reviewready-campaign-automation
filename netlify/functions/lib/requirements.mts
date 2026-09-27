@@ -149,9 +149,11 @@ export function creatorFeedbackPolicy(campaign: any, requirements: any, semantic
     ['fund_delivery', 'fund_delivery_clarity', 'Explain how the funds will reach the beneficiary.'],
     ['consistency', 'internal_consistency', 'Clarify any difference between the title, category, story, and beneficiary.'],
   ]
-  for (const [category, dimension, text] of dimensions) {
-    if (semantic?.status !== 'complete' || semantic[dimension] !== 'low' || covered.has(category) || (missingForType[category] || []).some(field => missing.has(field))) continue
-    add({ category, urgency: 'medium', text })
+  if (!covered.size) {
+    for (const [category, dimension, text] of dimensions) {
+      if (semantic?.status !== 'complete' || semantic[dimension] !== 'low' || (missingForType[category] || []).some(field => missing.has(field))) continue
+      add({ category, urgency: 'medium', text })
+    }
   }
   if (!tips.length && ['targeted_clarification', 'strong_correction'].includes(assessment?.recommendation)) {
     for (const [category, dimension, text] of dimensions) {

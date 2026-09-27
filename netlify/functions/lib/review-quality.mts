@@ -17,3 +17,11 @@ export function prepareReviewerBrief(review: any) {
     provided_information: [...new Set((review.provided_information || []).map((value: any) => String(value).trim()).filter(Boolean))],
   }
 }
+
+export function prepareReadinessAssessment(campaign: any, assessment: any) {
+  if (!/^TEST ONLY\b/i.test(String(campaign.title || ''))) return assessment
+  return {
+    ...assessment,
+    issues: (assessment.issues || []).filter((issue: any) => !/TEST ONLY|test or demo|fictional presentation example|real campaign/i.test(String(issue.feedback || ''))),
+  }
+}
