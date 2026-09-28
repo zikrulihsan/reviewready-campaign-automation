@@ -112,7 +112,7 @@ The decision logic is pure and tested without network or database access:
 
 ```bash
 npm install
-node --test tests/
+node --test tests/*.test.mjs
 ```
 
 ## Deploying your own
