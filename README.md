@@ -1,101 +1,141 @@
 # ReviewReady
 
-ReviewReady is an end-to-end campaign review prototype. A creator submits a story, receives AI clarity notes, revises if needed, and enters a human review queue. Reviewers can inspect uploaded documents, request specific changes, approve the story, complete manual verification, and publish a campaign page.
+**AI prepares. People decide.**
 
-The manual review checklist follows the themes in [LaunchGood's campaign verification guidance](https://support.launchgood.com/support/solutions/articles/35000016132-how-does-launchgood-vet-campaigns-): supporting documentation, beneficiary and funds path, sanctions/risk review, and campaign guidelines. This prototype records reviewer decisions; it does not run external verification services.
+ReviewReady is a working prototype of a campaign review pipeline for a crowdfunding platform. A creator submits a campaign, automated checks and a language model prepare it, and a human reviewer receives a case that is ready to judge. The model never approves, rejects, or rates trustworthiness.
 
-## Hosted architecture
+Built as a submission for LaunchGood's Applied AI Engineer challenge, which asked for a deployed prototype rather than a resume.
 
-- **Netlify:** Vite frontend and TypeScript API Functions in one deploy.
-- **Supabase:** private PostgreSQL schema for campaigns, analysis, processing events, and notification delivery records.
-- **n8n Cloud:** asynchronous workflow triggered by a Supabase Database Webhook after a submission is committed.
-- **Gemini API:** optional semantic analysis. When unavailable, the submission remains reviewable and model findings are marked unavailable.
+---
 
-The browser calls the same relative API paths it uses today. Supabase credentials, Gemini key, and internal API token are server-side environment variables only.
+## The problem this solves
 
-## Deploy setup
+Reviewing a campaign is rarely blocked on judgement. It is blocked on preparation.
 
-### 1. Supabase
+A reviewer opens a campaign and finds no beneficiary relationship, no supporting document, and a funding goal with no breakdown. They cannot decide yet, so they send an email and wait two days. The document that comes back is the wrong one. Meanwhile the campaign waits, the reviewer does administrative work, and some creators give up.
 
-1. Use the existing Supabase project linked to this repository.
-2. Apply pending migrations in `supabase/migrations` with `supabase db push`.
-3. In **Database → Webhooks**, create an `INSERT` webhook for `reviewready.submission_events`.
-4. Set its URL to the production URL of the n8n webhook `campaign-submitted` and add the header required by the n8n Webhook Header Auth credential.
-5. Copy the **Transaction pooler** connection string from Supabase **Connect**. Do not use the browser Data API for application tables.
+That is a preparation problem, and preparation is the part a machine can take.
 
-### 2. Netlify
+## Where the line sits
 
-1. Import this repository as a Netlify site. Use the repository root as the base directory; `netlify.toml` sets the Vite output and Functions directory.
-2. Add these environment variables in Netlify site settings:
-   - `DATABASE_URL`: Supabase Transaction pooler URL.
-   - `INTERNAL_TOKEN`: long random value shared with n8n's Header Auth credential.
-   - `GEMINI_API_KEY`: optional model key; keep it out of the Vite environment.
-   - `GEMINI_MODEL`: optional, defaults to `gemini-2.5-flash`.
-   - `PUBLIC_APP_URL`: public site origin for links in notifications.
-   - `SLACK_REVIEWER_WEBHOOK_URL`: incoming webhook for the reviewer channel.
-   - `SMTP_HOST=smtp.sumopod.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`, `SMTP_USER`, `SMTP_PASSWORD`: Sumopod's documented SMTP settings and your account credentials.
-   - `NOTIFICATION_FROM_EMAIL`: sender on a verified domain, such as `ReviewReady <updates@example.com>`.
-3. Deploy. The root build command installs the Vite app dependencies and builds `web/dist`.
+The line between model and human is enforced in code, not stated in a prompt and hoped for.
 
-Create the Slack webhook in your Slack app settings: enable **Incoming Webhooks**, choose **Add New Webhook to Workspace**, select the reviewer channel, and authorize it. Copy the generated URL into Netlify as `SLACK_REVIEWER_WEBHOOK_URL`. Treat that URL as a password; Slack can revoke leaked webhook URLs.
+| Decision | Made by | Why |
+| --- | --- | --- |
+| Are the required fields present and valid | Code | Must be identical every time and auditable |
+| How clearly the story explains itself | Model | A language judgement, which is where models are useful |
+| Whether a document relates to the campaign | Model describes, code acts | The model reads; code decides what follows |
+| Which state the campaign moves to | Code | Fixed thresholds, not probabilities |
+| How often a creator may be asked to clarify | Code | Capped at two rounds — a product decision, not a model one |
+| Approve, reject, or request changes | Human | Money and trust are at stake |
+| Identity and sanctions verification | Human | Requires sources outside this system |
+| Publishing the campaign | Human | The final act stays with a person |
 
-### 3. n8n Cloud
+Three mechanisms enforce it:
 
-1. Import `n8n/workflow.json`.
-2. In **Validate Event**, set both `api_base_url` and `app_base_url` to the deployed Netlify origin.
-3. Configure Webhook Header Auth on **Campaign Submitted Webhook**. Use the same header name and value configured on the Supabase Database Webhook.
-4. Configure HTTP Header Auth with `X-Internal-Token` and the same `INTERNAL_TOKEN` used by Netlify on the internal API nodes.
-5. Activate the workflow and ensure the Supabase Database Webhook points to the active production webhook URL.
+- **The system instruction forbids the judgement.** `lib/gemini.mts` instructs the model to *"not approve, reject, predict fraud, or infer truthfulness"* and to assess only whether a human reviewer can understand the submission.
+- **Routing is a pure function.** `decideReadiness()` and `decideSubmissionRoute()` in `lib/requirements.mts` take the model's description as input and decide the outcome with fixed thresholds. No model call sits in that path.
+- **Model output is untrusted until validated.** Every response is constrained by a JSON schema and parsed with zod. Anything outside the expected shape is discarded rather than used.
 
-The trial is temporary. n8n Cloud requires a paid plan after the trial; if it ends, post-submit automation will stop until it is available again. Supabase Free projects may pause after a week of low activity. Use synthetic campaign content and sample files only: the public prototype has no login.
+Creator text is also treated as data, never as instructions — a prompt-injection defence for a system whose input is prose written by strangers.
 
-## Local development
+## How a submission flows
 
-Install the Netlify CLI and Supabase CLI for local development. Use the Supabase project Transaction pooler URL and server-only environment variables in a local `.env`. Keep `DATABASE_SSL=require` for Supabase. For a local PostgreSQL test instance only, set `DATABASE_SSL=disable`. Then run:
+1. Creator submits a campaign, no documents yet.
+2. Deterministic checks run first. `requirementSpec()` varies the required evidence by `profile_type` and `category` — a medical campaign for a relative demands different fields than travel funding for oneself.
+3. The model rates clarity across purpose, beneficiary, fund usage, fund delivery, and internal consistency.
+4. `decideSubmissionRoute()` either returns the campaign to the creator with at most two tips, or forwards it to a reviewer with findings attached.
+5. The reviewer reads a prepared case: score breakdown, prior clarity notes, a summary, evidence quoted from the submission, and a neutral question they could ask. They approve, request changes, continue, or escalate.
+6. Documents are requested, checked, and the reviewer publishes.
 
-```sh
-pnpm install
-npm --prefix web ci
-pnpm dev
-```
+A Supabase trigger fires on insert into `submission_events`, which drives an n8n workflow that calls back into the API. Each step is a separate function invocation, so no single request carries the whole pipeline.
 
-Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite proxies API requests to the local Netlify Functions server on port 8888. Both use the configured Supabase project; only use synthetic prototype content.
+## The score
 
-## End-to-end testing
+100 points, split so each contributor is accountable for its own part:
 
-See [the end-to-end scenario matrix and latest run results](docs/e2e-test-scenarios.md). Notification-specific checks are in [the delivery test plan](docs/notification-e2e-test-plan.md).
+| Component | Points | Computed by |
+| --- | --- | --- |
+| Completeness | 30 | Code — proportion of required fields present and valid |
+| Clarity | 50 | Model — four dimensions, capped at 25 when the submission is thin |
+| Consistency | 20 | Model — internal contradictions |
 
-## Submission lifecycle
+When the model is unavailable the score is `null`, not a partial number. A missing input produces a missing score rather than a confident-looking one.
 
-1. The API saves the campaign and a `CAMPAIGN_SUBMITTED` event in one database transaction. Missing campaign details become review notes rather than blocking submission.
-2. The API immediately responds to the creator. A Supabase Database Webhook asynchronously starts n8n.
-3. n8n claims the event, requests deterministic and AI checks from the TypeScript API, then requests API persistence of the reviewer packet.
-4. An internal reviewability assessment scores completeness (30 points), clarity (50), and consistency (20) for routing. The creator sees only material, actionable tips; their count follows the gaps found rather than a fixed quota. The reviewer sees classified findings with evidence and a neutral follow-up question, not a numeric quality grade. The first submission may be returned for clarification. On the second submission, mild gaps enter the human review queue, while a strong correction finding or a supporting document with low relevance may be returned once more. The third creator submission enters the queue with remaining findings attached. **Submit as it is** is offered for mild gaps and counts as a creator submission. Expedited submissions go to human review with findings attached. System retries do not count as creator submissions; unavailable AI analysis does not create a misleading quality score. See [the review audit and test cases](docs/review-audit.md).
-5. The **Urgent? Submit for an expedited review** toggle sends a time-sensitive submission directly to human review with any gaps attached. It records a priority request, not an automatic queue jump. Reviewers confirm expedited priority or keep the campaign in the standard queue. The reason and deadline are optional and review timing is not guaranteed.
-6. The creator enters an email address before submission. The API queues status emails for that address and a Slack alert for the reviewer channel when the packet is ready. A scheduled Netlify function retries failed deliveries.
-7. The reviewer reads the full story, opens actual uploaded PDF/image files, and accepts or rejects each document with a note. They can request changes; the creator sees the note, updates the story or files, and resubmits. Human feedback can repeat as needed.
-8. The reviewer approves campaign content. The creator then uploads a **sample personal ID** and other required supporting files. The reviewer confirms identity, beneficiary, funds path, sanctions/risk screening, and campaign guidelines manually. All required documents must have accepted uploaded files before publishing.
-9. Publishing creates a public `/campaign/:slug` story page. The public API returns only live campaign fields; document files and internal review notes are not included. Donation processing is not connected in this prototype.
+## When things fail
 
-## Operational behavior
+Failure paths are designed rather than discovered:
 
-- Events are idempotent by event ID and campaign version. The processing lease prevents duplicate packets.
-- Gemini calls are split across Functions and have a short timeout. A model or quota error produces an unavailable finding and does not block human review.
-- The prototype accepts up to 12 sample PDF, PNG, or JPEG files (2 MB each) per campaign. Identity and bank document contents are excluded from AI prompts; a reviewer must inspect them manually.
-- If automation stays in progress for five minutes, the creator/reviewer view reports preparation as paused. The creator can retry once; a retry creates a new event and packet processing remains idempotent.
-- Public endpoints have per-IP hourly limits for campaign creation, submission, and AI review. This is a demo safeguard, not account-level access control.
-- Reviewer change requests, content approval, and publication queue creator emails after the action is saved.
+- **Model unavailable or key missing.** Every call site falls back to `status: 'unavailable'` and the review continues; the packet reports that the notes are missing. Cached `unavailable` results are re-run once a key becomes available.
+- **Duplicate webhook delivery.** Every internal call carries an `event_id` and a `campaign_version`. The API claims the event atomically, so a replay does nothing.
+- **Workflow dies mid-run.** The job reports itself paused after five minutes and permits exactly one fresh processing event.
+- **Notification delivery fails.** Deliveries are queued with `attempts`, `next_attempt_at`, and `last_error`, claimed with `FOR UPDATE SKIP LOCKED`, and retried with backoff.
+- **Unauthorised internal calls.** `/internal/*` requires a shared token compared in constant time.
+- **Abuse of public endpoints.** Campaign creation, submission, and AI review carry per-IP hourly limits. This is a demo safeguard, not account-level access control.
 
-## Repository layout
+## Assumptions and scope
+
+This prototype was built without access to LaunchGood's internal systems, from their [public campaign verification guidance](https://support.launchgood.com/support/solutions/articles/35000016132-how-does-launchgood-vet-campaigns-). It assumes a small review team, more campaigns than reviewers, and preparation rather than judgement as the bottleneck.
+
+It records reviewer decisions. It does **not** perform OCR, identity verification, sanctions screening, bank validation, or payment processing, and it is not connected to any real platform. The final checklist records simulated human checks for demonstration. All sample data is fictional.
+
+> **This demo has no authentication.** Anyone with the site URL can view or change prototype campaigns and read uploaded files. Never upload a real ID, bank statement, or other sensitive document. Use synthetic files and a test email address only.
+
+## Architecture
+
+| Component | Role |
+| --- | --- |
+| Netlify | Vite frontend and TypeScript API Functions in one deploy |
+| Supabase | Private PostgreSQL schema for campaigns, analyses, processing events, and deliveries |
+| n8n | Asynchronous workflow triggered by a Supabase trigger after a submission commits |
+| Gemini | Optional semantic analysis; the system stays usable without it |
+
+Credentials are server-side environment variables only. The browser calls relative API paths and never holds a key.
 
 ```text
-web/                         Vite + React creator/reviewer interface
-netlify/functions/api.mts    TypeScript API routes
-netlify/functions/lib/       Database, Gemini, validation, and scoring logic
-supabase/migrations/         Private schema and demo operations tables
-n8n/workflow.json            Asynchronous post-submit workflow
+netlify/functions/
+  api.mts                   HTTP API (Hono) — routes, event claiming, state transitions
+  deliver-notifications.mts Scheduled delivery of queued notifications
+  lib/requirements.mts      Deterministic checks, scoring, routing — no model calls
+  lib/gemini.mts            Schema-constrained model calls
+  lib/notifications.mts     Slack and SMTP delivery with retry
+  lib/review-quality.mts    Reviewer feedback quality checks
+supabase/migrations/        Private schema, triggers, delivery tables
+n8n/workflow.json           Importable post-submission workflow
+web/                        Vite + React creator and reviewer interface
+tests/                      Unit tests for the pure decision logic
 ```
 
-## Demo limitations
+## Running the tests
 
-There is no authentication. Anyone with the site URL can view or change prototype campaigns and access uploaded files, so **never upload a real personal ID, bank statement, or other sensitive data**. Use synthetic sample files only and a test creator email address. Uploaded files can be viewed by the reviewer, but the system does not perform OCR, identity verification, sanctions screening, bank validation, or payment processing. The final checklist records simulated human checks for demonstration. Human reviewers retain all final decisions.
+The decision logic is pure and tested without network or database access:
+
+```bash
+npm install
+node --test tests/
+```
+
+## Deploying your own
+
+**Supabase.** Apply `supabase/migrations` with `supabase db push`. Store two secrets in Vault so the submission trigger can reach your workflow:
+
+```sql
+SELECT vault.create_secret('https://YOUR.app.n8n.cloud/webhook/campaign-submitted',
+                           'reviewready_n8n_webhook_url');
+SELECT vault.create_secret('YOUR-LONG-RANDOM-TOKEN',
+                           'reviewready_n8n_webhook_token');
+```
+
+Copy the **Transaction pooler** connection string from **Connect** — transaction mode suits serverless, and `lib/db.mts` sets `prepare: false` accordingly.
+
+**Netlify.** Import the repository; `netlify.toml` sets the build command, publish directory, and functions directory. Configure the variables documented in [`.env.example`](.env.example). `DATABASE_URL` and `INTERNAL_TOKEN` are required; the Gemini, Slack, and SMTP values are optional and degrade cleanly when absent.
+
+**n8n.** Import `n8n/workflow.json`, set `api_base_url` to your deployed origin, add Header Auth with `X-Internal-Token` matching `INTERNAL_TOKEN`, and activate it. See [`n8n/README.md`](n8n/README.md).
+
+## Security
+
+Secrets live in environment variables and Supabase Vault, never in this repository. See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## License
+
+[MIT](LICENSE)

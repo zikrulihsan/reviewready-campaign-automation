@@ -22,7 +22,7 @@ BEGIN
   END IF;
 
   PERFORM net.http_post(
-    url := 'https://ahsanproject.app.n8n.cloud/webhook/campaign-submitted',
+    url := 'https://REPLACE_WITH_YOUR_N8N_HOST/webhook/campaign-submitted',
     body := jsonb_build_object(
       'type', TG_OP,
       'table', TG_TABLE_NAME,
