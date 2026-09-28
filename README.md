@@ -4,6 +4,37 @@ ReviewReady is an end-to-end campaign review prototype. A creator submits a stor
 
 The manual review checklist follows the themes in [LaunchGood's campaign verification guidance](https://support.launchgood.com/support/solutions/articles/35000016132-how-does-launchgood-vet-campaigns-): supporting documentation, beneficiary and funds path, sanctions/risk review, and campaign guidelines. This prototype records reviewer decisions; it does not run external verification services.
 
+**Live demo:** <https://reviewready-campaign.netlify.app> (synthetic data only — see [Demo limitations](#demo-limitations)).
+
+## Highlights
+
+- **Creator flow:** guided campaign wizard, supporting-document upload, adaptive AI clarity tips, revise-and-resubmit, optional expedited review request.
+- **Reviewer flow:** prioritized queue, full story and document viewer, per-document accept/reject notes, change requests, content approval, manual verification checklist, publish.
+- **Asynchronous automation:** submission is committed in one transaction, then a Supabase Database Webhook starts an n8n workflow that calls idempotent internal API steps.
+- **Graceful AI degradation:** Gemini findings are optional; a model failure or missing key marks findings unavailable and never blocks human review.
+- **Notifications:** Slack alert for reviewers and SMTP email for creators, queued transactionally with scheduled retries.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | React 19, React Router 7, Vite 6 |
+| API | TypeScript on Netlify Functions, Hono, Zod |
+| Database | Supabase PostgreSQL (private schema, SQL migrations) |
+| Automation | n8n Cloud workflow |
+| AI | Google Gemini API (optional) |
+| Notifications | Slack Incoming Webhooks, Nodemailer (SMTP) |
+
+```mermaid
+flowchart LR
+  B[Browser<br/>React + Vite] -->|REST| F[Netlify Functions<br/>Hono API]
+  F --> DB[(Supabase<br/>PostgreSQL)]
+  DB -->|Database Webhook| N[n8n workflow]
+  N -->|X-Internal-Token| F
+  F --> G[Gemini API]
+  F --> S[Slack / SMTP]
+```
+
 ## Hosted architecture
 
 - **Netlify:** Vite frontend and TypeScript API Functions in one deploy.
@@ -17,8 +48,8 @@ The browser calls the same relative API paths it uses today. Supabase credential
 
 ### 1. Supabase
 
-1. Use the existing Supabase project linked to this repository.
-2. Apply pending migrations in `supabase/migrations` with `supabase db push`.
+1. Create a Supabase project and link it with `supabase link --project-ref <your-project-ref>`.
+2. Apply the migrations in `supabase/migrations` with `supabase db push`.
 3. In **Database → Webhooks**, create an `INSERT` webhook for `reviewready.submission_events`.
 4. Set its URL to the production URL of the n8n webhook `campaign-submitted` and add the header required by the n8n Webhook Header Auth credential.
 5. Copy the **Transaction pooler** connection string from Supabase **Connect**. Do not use the browser Data API for application tables.
@@ -61,6 +92,15 @@ pnpm dev
 
 Open the Vite URL shown by Netlify Dev, normally `http://localhost:5173`. Vite proxies API requests to the local Netlify Functions server on port 8888. Both use the configured Supabase project; only use synthetic prototype content.
 
+## Testing
+
+Unit tests for the requirement checks, readiness scoring, and routing policy:
+
+```sh
+pnpm install
+pnpm test:review
+```
+
 ## End-to-end testing
 
 See [the end-to-end scenario matrix and latest run results](docs/e2e-test-scenarios.md). Notification-specific checks are in [the delivery test plan](docs/notification-e2e-test-plan.md).
@@ -94,8 +134,18 @@ netlify/functions/api.mts    TypeScript API routes
 netlify/functions/lib/       Database, Gemini, validation, and scoring logic
 supabase/migrations/         Private schema and demo operations tables
 n8n/workflow.json            Asynchronous post-submit workflow
+tests/                       Node test runner unit tests for scoring and routing
+docs/                        Review audit, E2E scenarios, and demo fixtures
 ```
 
 ## Demo limitations
 
 There is no authentication. Anyone with the site URL can view or change prototype campaigns and access uploaded files, so **never upload a real personal ID, bank statement, or other sensitive data**. Use synthetic sample files only and a test creator email address. Uploaded files can be viewed by the reviewer, but the system does not perform OCR, identity verification, sanctions screening, bank validation, or payment processing. The final checklist records simulated human checks for demonstration. Human reviewers retain all final decisions.
+
+## Security
+
+No credentials are stored in this repository; all secrets are server-side environment variables (see [`.env.example`](.env.example)). To report a vulnerability, follow [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE) © 2026 [zikrulihsan](https://github.com/zikrulihsan)
