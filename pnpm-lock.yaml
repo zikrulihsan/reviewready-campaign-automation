@@ -12,8 +12,8 @@ importers:
         specifier: ^4.7.2
         version: 4.13.9
       nodemailer:
-        specifier: 10.0.8
-        version: 10.0.8
+        specifier: 10.0.9
+        version: 10.0.9
       postgres:
         specifier: ^3.4.5
         version: 3.4.9
@@ -1335,8 +1335,8 @@ packages:
     resolution: {integrity: sha512-71kFFjYaSshDTA8/a2HiTYPLdASWjLJxUyJxGE+ffxU+KhxSBtM9kiLUX+R2yooFdSFKMFpi4n3PFtDy6qXv8A==}
     engines: {node: '>=18'}
 
-  nodemailer@10.0.8:
-    resolution: {integrity: sha512-uCZ0AtFDI46sHwJ6mhwNuIoA/KiTC0ZCzX7g01941+H9VMIXEiZjtgjQkzoBRTeQba0cIrKfwk31q99PfcIMRw==}
+  nodemailer@10.0.9:
+    resolution: {integrity: sha512-BF0qcyplCwp+jMk6HCjFykBz/YhhZSsxrARhOldLwFWH+8kGjQsd2WIMIZhqEuyXRoGFi0ONbDeWDMDoL8MhLw==}
     engines: {node: '>=20.0.0'}
 
   nopt@8.1.0:
@@ -3295,7 +3295,7 @@ snapshots:
     dependencies:
       '@babel/parser': 7.29.9
 
-  nodemailer@10.0.8: {}
+  nodemailer@10.0.9: {}
 
   nopt@8.1.0:
     dependencies:
